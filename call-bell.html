@@ -455,6 +455,10 @@
 
   // ---- text-to-speech announcement ----
   var koVoice = null;
+  // Keep a module-level reference to the in-flight utterance: some browsers
+  // silently drop speech if the SpeechSynthesisUtterance gets garbage
+  // collected before it finishes (it's only weakly referenced internally).
+  var activeUtterance = null;
   function pickVoice() {
     try {
       var voices = speechSynthesis.getVoices();
@@ -467,23 +471,23 @@
     speechSynthesis.onvoiceschanged = pickVoice;
     pickVoice();
   }
-  function unlockSpeech() {
-    try {
-      var warm = new SpeechSynthesisUtterance(" ");
-      warm.volume = 0;
-      speechSynthesis.speak(warm);
-    } catch (e) {}
-  }
-  function speakTeacher(name) {
+  function speak(text) {
     if (!("speechSynthesis" in window)) return;
     try {
       speechSynthesis.cancel();
-      var u = new SpeechSynthesisUtterance(name + " 선생님을 호출합니다");
+      var u = new SpeechSynthesisUtterance(text);
       u.lang = "ko-KR";
       if (koVoice) u.voice = koVoice;
       u.rate = 0.95;
+      activeUtterance = u;
       speechSynthesis.speak(u);
     } catch (e) {}
+  }
+  function unlockSpeech() {
+    speak("호출 준비 완료");
+  }
+  function speakTeacher(name) {
+    speak("딩동, " + name + " 선생님");
   }
 
   function formatClock(ts) {
@@ -658,17 +662,15 @@
 
       if (currentActiveId !== active.id) {
         currentActiveId = active.id;
-        var speechTicks = 0;
         try { navigator.vibrate && navigator.vibrate([300, 150, 300, 150, 300]); } catch (e) {}
         playChime();
         speakTeacher(active.teacher);
         clearInterval(chimeTimer);
         chimeTimer = setInterval(function () {
           playChime();
+          speakTeacher(active.teacher);
           try { navigator.vibrate && navigator.vibrate(200); } catch (e) {}
-          speechTicks++;
-          if (speechTicks % 4 === 0) speakTeacher(active.teacher);
-        }, 1600);
+        }, 2600);
       }
 
       var ackBtn = document.getElementById("ack-btn");
