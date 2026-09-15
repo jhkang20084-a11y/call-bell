@@ -233,6 +233,61 @@
   }
   .reset-btn:hover{ opacity: .9; }
 
+  .diag-btn{
+    position: fixed;
+    bottom: 0.9rem;
+    left: 1rem;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: .78rem;
+    padding: .4rem .6rem;
+    opacity: .45;
+  }
+  .diag-btn:hover{ opacity: .9; }
+
+  .diag-overlay{
+    position: fixed;
+    inset: 0;
+    background: rgba(6, 8, 12, 0.92);
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6vh 6vw;
+  }
+  .diag-panel{
+    width: min(560px, 100%);
+    max-height: 86vh;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 1.6rem;
+    text-align: left;
+  }
+  .diag-panel h2{ margin: 0 0 1rem; font-family: "Do Hyeon", sans-serif; font-size: 1.3rem; font-weight: normal; }
+  .diag-row{ display: flex; justify-content: space-between; gap: 1rem; padding: .5rem 0; border-bottom: 1px solid var(--border); font-size: .92rem; }
+  .diag-row:last-of-type{ border-bottom: none; }
+  .diag-label{ color: var(--text-dim); flex-shrink: 0; white-space: nowrap; }
+  .diag-value{ text-align: right; font-weight: 700; word-break: break-word; }
+  .diag-value.bad{ color: var(--alert); }
+  .diag-value.good{ color: var(--accent); }
+  .diag-voices{ margin-top: .8rem; padding: .8rem; background: var(--surface-raised); border-radius: 10px; font-size: .82rem; color: var(--text-dim); max-height: 140px; overflow-y: auto; }
+  .diag-voices div{ padding: .15rem 0; }
+  .diag-actions{ display: flex; gap: .7rem; margin-top: 1.2rem; flex-wrap: wrap; }
+  .diag-actions button{
+    flex: 1;
+    min-width: 120px;
+    background: var(--accent);
+    color: #08130e;
+    font-weight: 700;
+    padding: .8rem 1rem;
+    border-radius: 10px;
+    font-size: .92rem;
+  }
+  .diag-actions button.secondary{ background: var(--surface-raised); color: var(--text); }
+  .diag-close{ width: 100%; margin-top: .7rem; background: transparent; color: var(--text-dim); padding: .6rem; }
+
   .conn-pill{
     position: fixed;
     top: 0.8rem;
@@ -321,6 +376,23 @@
 </div>
 <div id="toast" class="toast"></div>
 <button id="reset-btn" class="reset-btn" hidden>기기 설정 초기화</button>
+<button id="diag-btn" class="diag-btn" hidden>🔧 음성 진단</button>
+
+<div id="diag-overlay" class="diag-overlay" hidden>
+  <div class="diag-panel">
+    <h2 class="display">🔧 음성 진단</h2>
+    <div class="diag-row"><span class="diag-label">브라우저</span><span id="diag-ua" class="diag-value" style="font-weight:400; font-size:.78rem;"></span></div>
+    <div class="diag-row"><span class="diag-label">음성 합성 지원</span><span id="diag-support" class="diag-value"></span></div>
+    <div class="diag-row"><span class="diag-label">감지된 음성 수</span><span id="diag-count" class="diag-value"></span></div>
+    <div class="diag-row"><span class="diag-label">한국어 음성</span><span id="diag-ko" class="diag-value"></span></div>
+    <div id="diag-voices" class="diag-voices"></div>
+    <div class="diag-actions">
+      <button id="diag-refresh" class="secondary">🔄 다시 검사</button>
+      <button id="diag-test">▶️ 테스트 재생</button>
+    </div>
+    <button id="diag-close" class="diag-close">닫기</button>
+  </div>
+</div>
 
 <script>
 (function () {
@@ -378,6 +450,45 @@
   resetBtn.addEventListener("click", function () {
     try { localStorage.removeItem(ROLE_KEY); } catch (e) {}
     location.reload();
+  });
+
+  // ---- voice diagnostics panel (for debugging silent TTS on a device) ----
+  var diagBtn = document.getElementById("diag-btn");
+  var diagOverlay = document.getElementById("diag-overlay");
+  diagBtn.hidden = false;
+  function runDiagnostics() {
+    var supported = "speechSynthesis" in window;
+    document.getElementById("diag-ua").textContent = navigator.userAgent;
+    var supportEl = document.getElementById("diag-support");
+    supportEl.textContent = supported ? "지원됨" : "지원 안 됨";
+    supportEl.className = "diag-value " + (supported ? "good" : "bad");
+
+    var voices = supported ? speechSynthesis.getVoices() : [];
+    var countEl = document.getElementById("diag-count");
+    countEl.textContent = voices.length + "개";
+    countEl.className = "diag-value " + (voices.length > 0 ? "good" : "bad");
+
+    var hasKo = voices.some(function (v) { return v.lang && v.lang.indexOf("ko") === 0; });
+    var koEl = document.getElementById("diag-ko");
+    koEl.textContent = hasKo ? "있음" : "없음";
+    koEl.className = "diag-value " + (hasKo ? "good" : "bad");
+
+    var list = document.getElementById("diag-voices");
+    list.innerHTML = voices.length === 0
+      ? "이 기기에서 사용 가능한 음성이 하나도 없어요."
+      : voices.map(function (v) { return "<div>" + v.name + " — " + v.lang + "</div>"; }).join("");
+  }
+  diagBtn.addEventListener("click", function () {
+    diagOverlay.hidden = false;
+    runDiagnostics();
+    setTimeout(runDiagnostics, 600); // voice list can load asynchronously
+  });
+  document.getElementById("diag-close").addEventListener("click", function () {
+    diagOverlay.hidden = true;
+  });
+  document.getElementById("diag-refresh").addEventListener("click", runDiagnostics);
+  document.getElementById("diag-test").addEventListener("click", function () {
+    speak("테스트, 하나 둘 셋");
   });
 
   var wakeLock = null;
