@@ -776,8 +776,9 @@
         try { navigator.vibrate && navigator.vibrate([300, 150, 300, 150, 300]); } catch (e) {}
         playChime();
         speakTeacher(active.teacher);
-        clearInterval(chimeTimer);
-        chimeTimer = setInterval(function () {
+        clearTimeout(chimeTimer);
+        // Announce the name twice total, then stay silent (screen stays up until acknowledged).
+        chimeTimer = setTimeout(function () {
           playChime();
           speakTeacher(active.teacher);
           try { navigator.vibrate && navigator.vibrate(200); } catch (e) {}
@@ -786,7 +787,7 @@
 
       var ackBtn = document.getElementById("ack-btn");
       ackBtn.onclick = function () {
-        clearInterval(chimeTimer);
+        clearTimeout(chimeTimer);
         clearInterval(elapsedTimer);
         currentActiveId = null;
         try { speechSynthesis.cancel(); } catch (e) {}
@@ -806,7 +807,7 @@
       if (pending.length > 0) {
         renderAlert(pending[0]);
       } else {
-        clearInterval(chimeTimer);
+        clearTimeout(chimeTimer);
         clearInterval(elapsedTimer);
         currentActiveId = null;
         renderIdle();
