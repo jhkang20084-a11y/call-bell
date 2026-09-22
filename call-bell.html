@@ -122,6 +122,8 @@
   }
   .teacher-card[data-state="acked"]{ border-color: var(--accent); background: var(--accent-dim); }
   .teacher-card[data-state="acked"] .teacher-status{ color: var(--accent); }
+  .teacher-card[data-state="missed"]{ border-color: var(--warn); background: rgba(255,176,32,0.12); }
+  .teacher-card[data-state="missed"] .teacher-status{ color: var(--warn); }
 
   /* ---------- receiver: start gate ---------- */
   .start-btn{
@@ -193,6 +195,7 @@
   }
   .alert-title{ font-family: "Do Hyeon", sans-serif; font-size: clamp(2.2rem, 7vw, 3.4rem); color: var(--alert); }
   .alert-elapsed{ font-size: 1.3rem; color: var(--text-dim); }
+  .alert-hint{ font-size: .82rem; color: var(--text-dim); opacity: .7; }
   .ack-btn{
     background: var(--text);
     color: #1a0705;
@@ -368,6 +371,7 @@
   <div id="alert-title" class="alert-title">호출입니다!</div>
   <div class="alert-elapsed mono"><span id="alert-elapsed">0초</span> 전</div>
   <button id="ack-btn" class="ack-btn">확인했어요</button>
+  <div class="alert-hint">30초 안에 확인하지 않으면 자동으로 미확인 처리돼요</div>
 </div>
 
 <div id="conn-pill" class="conn-pill" data-status="connecting" hidden>
@@ -400,6 +404,7 @@
   var LOCAL_LOCK_MS = 1500;
   var ACKED_DISPLAY_MS = 4000;
   var HISTORY_KEEP = 50;
+  var AUTO_EXPIRE_MS = 30000;
   // Public pub/sub channel (ntfy.sh) — long random name so nobody can guess it.
   var NTFY_TOPIC = "gyomusil-hobul-706c5e98ed0185566eb27ff052cd3fbf";
   var NTFY_BASE = "https://ntfy.sh/" + NTFY_TOPIC;
@@ -624,10 +629,11 @@
       if (existing) {
         existing.acknowledged = true;
         existing.acknowledgedAt = payload.acknowledgedAt;
+        existing.missed = !!payload.missed;
       } else {
         callStore[payload.id] = {
           id: payload.id, teacher: payload.teacher, calledAt: payload.calledAt,
-          acknowledged: true, acknowledgedAt: payload.acknowledgedAt
+          acknowledged: true, acknowledgedAt: payload.acknowledgedAt, missed: !!payload.missed
         };
       }
     }
@@ -686,6 +692,9 @@
           card.setAttribute("data-state", "waiting");
           var secs = Math.max(0, Math.floor((now - doc.calledAt) / 1000));
           statusEl.textContent = "호출 중… " + secs + "초";
+        } else if (doc && doc.acknowledged && doc.missed && now - doc.acknowledgedAt < ACKED_DISPLAY_MS) {
+          card.setAttribute("data-state", "missed");
+          statusEl.textContent = "응답이 없었어요 (미확인)";
         } else if (doc && doc.acknowledged && now - doc.acknowledgedAt < ACKED_DISPLAY_MS) {
           card.setAttribute("data-state", "acked");
           statusEl.textContent = "확인했어요 ✅";
@@ -734,6 +743,7 @@
   function startReceiver() {
     var elapsedTimer = null;
     var chimeTimer = null;
+    var expireTimer = null;
     var currentActiveId = null;
 
     function renderIdle() {
@@ -748,11 +758,17 @@
         return;
       }
       list.innerHTML = acked.map(function (d) {
-        var latency = Math.max(0, Math.round((d.acknowledgedAt - d.calledAt) / 1000));
+        var latencyHtml;
+        if (d.missed) {
+          latencyHtml = '<span class="history-latency" style="color:var(--alert);">미확인 (30초 초과)</span>';
+        } else {
+          var latency = Math.max(0, Math.round((d.acknowledgedAt - d.calledAt) / 1000));
+          latencyHtml = '<span class="history-latency">' + latency + '초 만에 확인</span>';
+        }
         return '<div class="history-row">' +
           '<span class="history-name">' + d.teacher + '</span>' +
           '<span class="history-time mono">' + formatClock(d.calledAt) + '</span>' +
-          '<span class="history-latency">' + latency + '초 만에 확인</span>' +
+          latencyHtml +
           '</div>';
       }).join("");
     }
@@ -783,20 +799,28 @@
           speakTeacher(active.teacher);
           try { navigator.vibrate && navigator.vibrate(200); } catch (e) {}
         }, 2600);
+
+        // Not answered within AUTO_EXPIRE_MS: stop ringing, mark missed, move on
+        // so a stuck call doesn't block/overlap alerts for other teachers.
+        clearTimeout(expireTimer);
+        expireTimer = setTimeout(function () { ackCall(active, true); }, AUTO_EXPIRE_MS);
       }
 
-      var ackBtn = document.getElementById("ack-btn");
-      ackBtn.onclick = function () {
-        clearTimeout(chimeTimer);
-        clearInterval(elapsedTimer);
-        currentActiveId = null;
-        try { speechSynthesis.cancel(); } catch (e) {}
-        var now = Date.now();
-        active.acknowledged = true;
-        active.acknowledgedAt = now;
-        publish({ type: "ack", id: active.id, teacher: active.teacher, calledAt: active.calledAt, acknowledgedAt: now });
-        renderFromStore();
-      };
+      document.getElementById("ack-btn").onclick = function () { ackCall(active, false); };
+    }
+
+    function ackCall(active, missed) {
+      clearTimeout(chimeTimer);
+      clearTimeout(expireTimer);
+      clearInterval(elapsedTimer);
+      currentActiveId = null;
+      try { speechSynthesis.cancel(); } catch (e) {}
+      var now = Date.now();
+      active.acknowledged = true;
+      active.acknowledgedAt = now;
+      active.missed = missed;
+      publish({ type: "ack", id: active.id, teacher: active.teacher, calledAt: active.calledAt, acknowledgedAt: now, missed: missed });
+      renderFromStore();
     }
 
     function renderFromStore() {
@@ -808,6 +832,7 @@
         renderAlert(pending[0]);
       } else {
         clearTimeout(chimeTimer);
+        clearTimeout(expireTimer);
         clearInterval(elapsedTimer);
         currentActiveId = null;
         renderIdle();
