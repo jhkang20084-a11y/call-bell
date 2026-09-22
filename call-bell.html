@@ -822,6 +822,15 @@
       }
       var name = card.getAttribute("data-name");
       var now = Date.now();
+
+      // Away teachers never get called: just tell the student locally, no trip to the office.
+      if (awayState[name] && awayState[name].away) {
+        if (localLockUntil[name] && now < localLockUntil[name]) return;
+        localLockUntil[name] = now + LOCAL_LOCK_MS;
+        showUnavailablePopup({ teacher: name });
+        return;
+      }
+
       if (card.getAttribute("data-state") === "waiting" || (localLockUntil[name] && now < localLockUntil[name])) return;
       localLockUntil[name] = now + LOCAL_LOCK_MS;
       render();
