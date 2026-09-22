@@ -124,6 +124,8 @@
   .teacher-card[data-state="acked"] .teacher-status{ color: var(--accent); }
   .teacher-card[data-state="missed"]{ border-color: var(--warn); background: rgba(255,176,32,0.12); }
   .teacher-card[data-state="missed"] .teacher-status{ color: var(--warn); }
+  .teacher-card[data-state="unavailable"]{ border-color: var(--warn); background: rgba(255,176,32,0.12); }
+  .teacher-card[data-state="unavailable"] .teacher-status{ color: var(--warn); }
 
   /* ---------- receiver: start gate ---------- */
   .start-btn{
@@ -196,6 +198,7 @@
   .alert-title{ font-family: "Do Hyeon", sans-serif; font-size: clamp(2.2rem, 7vw, 3.4rem); color: var(--alert); }
   .alert-elapsed{ font-size: 1.3rem; color: var(--text-dim); }
   .alert-hint{ font-size: .82rem; color: var(--text-dim); opacity: .7; }
+  .alert-actions{ display: flex; gap: .9rem; flex-wrap: wrap; justify-content: center; }
   .ack-btn{
     background: var(--text);
     color: #1a0705;
@@ -205,6 +208,16 @@
     border-radius: 999px;
   }
   .ack-btn:active{ transform: scale(0.97); }
+  .unavailable-btn{
+    background: transparent;
+    color: var(--warn);
+    border: 2px solid var(--warn);
+    font-family: "Do Hyeon", sans-serif;
+    font-size: 1.15rem;
+    padding: 1.1rem 1.8rem;
+    border-radius: 999px;
+  }
+  .unavailable-btn:active{ transform: scale(0.97); }
 
   /* ---------- shared ---------- */
   .toast{
@@ -347,6 +360,15 @@
   <div id="teacher-grid" class="teacher-grid"></div>
 </div>
 
+<div id="unavailable-overlay" class="diag-overlay" hidden>
+  <div class="diag-panel" style="text-align: center;">
+    <div style="font-size: 3.4rem;">🙅</div>
+    <h2 id="unavailable-text" class="display" style="margin-top: .8rem;"></h2>
+    <div class="role-sub" style="margin-bottom: 1.2rem;">잠시 후 다시 호출해보세요</div>
+    <button id="unavailable-dismiss" class="start-btn" style="width: 100%;">확인</button>
+  </div>
+</div>
+
 <div id="screen-receiver-start" class="screen" hidden>
   <div class="stack">
     <div class="idle-title display">수신 태블릿 준비</div>
@@ -370,7 +392,10 @@
   <span class="alert-icon">🔔</span>
   <div id="alert-title" class="alert-title">호출입니다!</div>
   <div class="alert-elapsed mono"><span id="alert-elapsed">0초</span> 전</div>
-  <button id="ack-btn" class="ack-btn">확인했어요</button>
+  <div class="alert-actions">
+    <button id="ack-btn" class="ack-btn">확인했어요</button>
+    <button id="unavailable-btn" class="unavailable-btn">🙅 안계십니다</button>
+  </div>
   <div class="alert-hint">30초 안에 확인하지 않으면 자동으로 미확인 처리돼요</div>
 </div>
 
@@ -630,10 +655,12 @@
         existing.acknowledged = true;
         existing.acknowledgedAt = payload.acknowledgedAt;
         existing.missed = !!payload.missed;
+        existing.unavailable = !!payload.unavailable;
       } else {
         callStore[payload.id] = {
           id: payload.id, teacher: payload.teacher, calledAt: payload.calledAt,
-          acknowledged: true, acknowledgedAt: payload.acknowledgedAt, missed: !!payload.missed
+          acknowledged: true, acknowledgedAt: payload.acknowledgedAt,
+          missed: !!payload.missed, unavailable: !!payload.unavailable
         };
       }
     }
@@ -665,6 +692,18 @@
 
     var grid = document.getElementById("teacher-grid");
     var localLockUntil = {};
+    var poppedUnavailable = {};
+    var callerAudioUnlocked = false;
+
+    function showUnavailablePopup(doc) {
+      document.getElementById("unavailable-text").textContent = doc.teacher + " 선생님은 지금 안 계세요";
+      document.getElementById("unavailable-overlay").hidden = false;
+      playChime();
+      speak(doc.teacher + " 선생님은 지금 자리에 안 계세요");
+    }
+    document.getElementById("unavailable-dismiss").addEventListener("click", function () {
+      document.getElementById("unavailable-overlay").hidden = true;
+    });
 
     grid.innerHTML = TEACHERS.map(function (name) {
       return '<button class="teacher-card" data-state="idle" data-name="' + name + '">' +
@@ -688,10 +727,17 @@
         var name = card.getAttribute("data-name");
         var doc = latestFor(name);
         var statusEl = card.querySelector(".teacher-status");
+        if (doc && doc.acknowledged && doc.unavailable && !poppedUnavailable[doc.id]) {
+          poppedUnavailable[doc.id] = true;
+          showUnavailablePopup(doc);
+        }
         if (doc && !doc.acknowledged) {
           card.setAttribute("data-state", "waiting");
           var secs = Math.max(0, Math.floor((now - doc.calledAt) / 1000));
           statusEl.textContent = "호출 중… " + secs + "초";
+        } else if (doc && doc.acknowledged && doc.unavailable && now - doc.acknowledgedAt < ACKED_DISPLAY_MS) {
+          card.setAttribute("data-state", "unavailable");
+          statusEl.textContent = "지금 안 계세요 🙅";
         } else if (doc && doc.acknowledged && doc.missed && now - doc.acknowledgedAt < ACKED_DISPLAY_MS) {
           card.setAttribute("data-state", "missed");
           statusEl.textContent = "응답이 없었어요 (미확인)";
@@ -714,6 +760,15 @@
     grid.addEventListener("click", function (e) {
       var card = e.target.closest(".teacher-card");
       if (!card) return;
+      if (!callerAudioUnlocked) {
+        callerAudioUnlocked = true;
+        unlockAudio();
+        try {
+          var warm = new SpeechSynthesisUtterance(" ");
+          warm.volume = 0;
+          speechSynthesis.speak(warm);
+        } catch (e) {}
+      }
       var name = card.getAttribute("data-name");
       var now = Date.now();
       if (card.getAttribute("data-state") === "waiting" || (localLockUntil[name] && now < localLockUntil[name])) return;
@@ -759,8 +814,10 @@
       }
       list.innerHTML = acked.map(function (d) {
         var latencyHtml;
-        if (d.missed) {
-          latencyHtml = '<span class="history-latency" style="color:var(--alert);">미확인 (30초 초과)</span>';
+        if (d.unavailable) {
+          latencyHtml = '<span class="history-latency" style="color:var(--warn);">🙅 안 계심으로 응답</span>';
+        } else if (d.missed) {
+          latencyHtml = '<span class="history-latency" style="color:var(--warn);">미확인 (30초 초과)</span>';
         } else {
           var latency = Math.max(0, Math.round((d.acknowledgedAt - d.calledAt) / 1000));
           latencyHtml = '<span class="history-latency">' + latency + '초 만에 확인</span>';
@@ -803,13 +860,14 @@
         // Not answered within AUTO_EXPIRE_MS: stop ringing, mark missed, move on
         // so a stuck call doesn't block/overlap alerts for other teachers.
         clearTimeout(expireTimer);
-        expireTimer = setTimeout(function () { ackCall(active, true); }, AUTO_EXPIRE_MS);
+        expireTimer = setTimeout(function () { ackCall(active, { missed: true }); }, AUTO_EXPIRE_MS);
       }
 
-      document.getElementById("ack-btn").onclick = function () { ackCall(active, false); };
+      document.getElementById("ack-btn").onclick = function () { ackCall(active, {}); };
+      document.getElementById("unavailable-btn").onclick = function () { ackCall(active, { unavailable: true }); };
     }
 
-    function ackCall(active, missed) {
+    function ackCall(active, opts) {
       clearTimeout(chimeTimer);
       clearTimeout(expireTimer);
       clearInterval(elapsedTimer);
@@ -818,8 +876,12 @@
       var now = Date.now();
       active.acknowledged = true;
       active.acknowledgedAt = now;
-      active.missed = missed;
-      publish({ type: "ack", id: active.id, teacher: active.teacher, calledAt: active.calledAt, acknowledgedAt: now, missed: missed });
+      active.missed = !!opts.missed;
+      active.unavailable = !!opts.unavailable;
+      publish({
+        type: "ack", id: active.id, teacher: active.teacher, calledAt: active.calledAt,
+        acknowledgedAt: now, missed: !!opts.missed, unavailable: !!opts.unavailable
+      });
       renderFromStore();
     }
 
