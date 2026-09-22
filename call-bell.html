@@ -23,6 +23,7 @@
   }
 
   *{ box-sizing: border-box; }
+  html{ font-size: 22px; } /* base bump: everything below is sized in rem, so this scales the whole UI up */
   html, body{ height: 100%; }
   body{
     margin: 0;
@@ -103,7 +104,7 @@
     align-items: center;
     justify-content: center;
     gap: .5rem;
-    min-height: 108px;
+    min-height: 130px;
     transition: transform .12s ease, border-color .2s ease, background .2s ease;
   }
   .teacher-card:active{ transform: scale(0.96); }
@@ -126,6 +127,17 @@
   .teacher-card[data-state="missed"] .teacher-status{ color: var(--warn); }
   .teacher-card[data-state="unavailable"]{ border-color: var(--warn); background: rgba(255,176,32,0.12); }
   .teacher-card[data-state="unavailable"] .teacher-status{ color: var(--warn); }
+  .away-badge{
+    position: absolute;
+    top: .6rem;
+    right: .6rem;
+    font-size: .68rem;
+    padding: .15rem .5rem;
+    border-radius: 999px;
+    background: var(--surface-raised);
+    color: var(--warn);
+    border: 1px solid var(--warn);
+  }
 
   /* ---------- receiver: start gate ---------- */
   .start-btn{
@@ -178,6 +190,32 @@
   .history-name{ color: var(--text); font-weight: 700; flex: 1; text-align: left; }
   .history-time{ color: var(--text-dim); }
   .history-latency{ color: var(--text-dim); }
+
+  .away-row{
+    display: flex;
+    align-items: center;
+    gap: .7rem;
+    padding: .6rem 1.2rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .away-row:last-child{ border-bottom: none; }
+  .away-name{ font-weight: 700; flex: 1; }
+  .away-pill{
+    font-size: .74rem;
+    padding: .2rem .6rem;
+    border-radius: 999px;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+  .away-pill.is-away{ border-color: var(--warn); color: var(--warn); }
+  .away-toggle{
+    font-size: .82rem;
+    padding: .5rem .9rem;
+    border-radius: 8px;
+    background: var(--surface-raised);
+    color: var(--text);
+  }
+  .away-toggle:active{ transform: scale(0.96); }
 
   /* ---------- receiver: active alert ---------- */
   .alert-screen{
@@ -381,6 +419,10 @@
   <div class="idle-row">
     <span class="idle-badge"></span>
     <span class="idle-title display">대기 중</span>
+  </div>
+  <div class="history">
+    <div class="history-head">선생님 재실 상태</div>
+    <div id="away-list" class="away-list"></div>
   </div>
   <div class="history">
     <div class="history-head">오늘 호출 기록</div>
@@ -642,8 +684,15 @@
 
   // shared in-memory store of recent calls, keyed by call id
   var callStore = {};
+  // latest away/present status per teacher name, e.g. { "김민진": { away: true, at: 169... } }
+  var awayState = {};
   function applyEvent(payload) {
-    if (!payload || !payload.id) return;
+    if (!payload || !payload.type) return;
+    if (payload.type === "away") {
+      awayState[payload.teacher] = { away: !!payload.away, at: payload.at };
+      return;
+    }
+    if (!payload.id) return;
     if (payload.type === "call") {
       callStore[payload.id] = {
         id: payload.id, teacher: payload.teacher,
@@ -707,6 +756,7 @@
 
     grid.innerHTML = TEACHERS.map(function (name) {
       return '<button class="teacher-card" data-state="idle" data-name="' + name + '">' +
+        '<span class="away-badge" hidden>부재중</span>' +
         '<span class="teacher-name">' + name + '</span>' +
         '<span class="teacher-status"></span>' +
         '</button>';
@@ -727,6 +777,7 @@
         var name = card.getAttribute("data-name");
         var doc = latestFor(name);
         var statusEl = card.querySelector(".teacher-status");
+        card.querySelector(".away-badge").hidden = !(awayState[name] && awayState[name].away);
         if (doc && doc.acknowledged && doc.unavailable && !poppedUnavailable[doc.id]) {
           poppedUnavailable[doc.id] = true;
           showUnavailablePopup(doc);
@@ -797,12 +848,36 @@
 
   function startReceiver() {
     var elapsedTimer = null;
-    var chimeTimer = null;
     var expireTimer = null;
     var currentActiveId = null;
 
+    function renderAwayList() {
+      var list = document.getElementById("away-list");
+      list.innerHTML = TEACHERS.map(function (name) {
+        var away = !!(awayState[name] && awayState[name].away);
+        return '<div class="away-row">' +
+          '<span class="away-name">' + name + '</span>' +
+          '<span class="away-pill' + (away ? ' is-away' : '') + '">' + (away ? "부재중" : "자리에 있음") + '</span>' +
+          '<button class="away-toggle" data-name="' + name + '" data-away="' + away + '">' +
+          (away ? "돌아왔어요" : "외출") +
+          '</button>' +
+          '</div>';
+      }).join("");
+    }
+    document.getElementById("away-list").addEventListener("click", function (e) {
+      var btn = e.target.closest(".away-toggle");
+      if (!btn) return;
+      var name = btn.getAttribute("data-name");
+      var goingAway = btn.getAttribute("data-away") !== "true";
+      var now = Date.now();
+      awayState[name] = { away: goingAway, at: now };
+      renderAwayList();
+      publish({ type: "away", teacher: name, away: goingAway, at: now });
+    });
+
     function renderIdle() {
       showScreen("receiverIdle");
+      renderAwayList();
       var list = document.getElementById("history-list");
       var acked = Object.keys(callStore).map(function (id) { return callStore[id]; })
         .filter(function (d) { return d.acknowledged; })
@@ -847,15 +922,9 @@
       if (currentActiveId !== active.id) {
         currentActiveId = active.id;
         try { navigator.vibrate && navigator.vibrate([300, 150, 300, 150, 300]); } catch (e) {}
+        // Announce the name once, then stay silent (screen stays up until acknowledged).
         playChime();
         speakTeacher(active.teacher);
-        clearTimeout(chimeTimer);
-        // Announce the name twice total, then stay silent (screen stays up until acknowledged).
-        chimeTimer = setTimeout(function () {
-          playChime();
-          speakTeacher(active.teacher);
-          try { navigator.vibrate && navigator.vibrate(200); } catch (e) {}
-        }, 2600);
 
         // Not answered within AUTO_EXPIRE_MS: stop ringing, mark missed, move on
         // so a stuck call doesn't block/overlap alerts for other teachers.
@@ -868,7 +937,6 @@
     }
 
     function ackCall(active, opts) {
-      clearTimeout(chimeTimer);
       clearTimeout(expireTimer);
       clearInterval(elapsedTimer);
       currentActiveId = null;
@@ -893,7 +961,6 @@
       if (pending.length > 0) {
         renderAlert(pending[0]);
       } else {
-        clearTimeout(chimeTimer);
         clearTimeout(expireTimer);
         clearInterval(elapsedTimer);
         currentActiveId = null;
