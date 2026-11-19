@@ -347,6 +347,7 @@
     box-shadow: 0 4px 18px rgba(0,0,0,.4);
   }
   .cam-mic{ background: rgba(255,255,255,.22); color: #fff; font-size: .85rem; font-weight: 700; padding: .45rem .8rem; border-radius: 999px; }
+  .cam-end{ background: #fff; color: var(--alert); }
   .cam-mic.muted{ background: rgba(0,0,0,.35); text-decoration: line-through; }
   .rec-dot{ width: 10px; height: 10px; border-radius: 50%; background: #fff; animation: breathe 1s ease-in-out infinite; }
   .cam-preview{ width: 72px; height: 54px; object-fit: cover; border-radius: 999px; background: #000; transform: scaleX(-1); }
@@ -539,6 +540,7 @@
   <span class="rec-dot"></span>
   <span>📷 카메라·마이크 켜짐 · 선생님과 연결됐어요<span id="cam-left"></span></span>
   <button id="cam-mic" class="cam-mic">🎤 켜짐</button>
+  <button id="cam-end" class="cam-mic cam-end">✖ 끊기</button>
   <video id="cam-preview" class="cam-preview" autoplay playsinline muted></video>
 </div>
 <audio id="remote-audio" autoplay></audio>
@@ -634,8 +636,8 @@
   var ACKED_DISPLAY_MS = 4000;
   var HISTORY_KEEP = 50;
   var AUTO_EXPIRE_MS = 30000;
-  var ANNOUNCE_MAX_AGE_MS = 30000;
-  var STALE_SEC = 30; // a call that was already this old when the page opened is ignored
+  var STALE_SEC = 30;   // a message already this old when received is ignored
+  var REPLAY_SEC = 15;  // older than this counts as history: no popups/sounds for it
   var ANNOUNCE_TEXT = "학생 여러분, 교실로 돌아가세요. 교실로 돌아가세요. 교무실 앞에서는 조용히 해 주세요.";
   // Public pub/sub channel (ntfy.sh) — long random name so nobody can guess it.
   var NTFY_TOPIC = "gyomusil-hobul-706c5e98ed0185566eb27ff052cd3fbf";
@@ -854,46 +856,60 @@
 
   // `next` receives each event payload in order (oldest first, then live).
   function subscribe(next) {
-    var es = new EventSource(NTFY_BASE + "/sse?since=12h");
+    var es = null;
     var chunkBuf = {};
-    // The server's "open" frame carries its clock. Anything older than that was
-    // replayed history (reload / reconnect), not something happening right now.
-    var openTime = 0;
-    es.addEventListener("open", function (e) {
-      if (!e.data) return;
-      try { openTime = JSON.parse(e.data).time || 0; } catch (err) {}
+    // The server's "open" frame carries its clock. Message age is measured on the
+    // server's clock, so tablets with a wrong clock still behave. A message that is
+    // already old when we receive it is replayed history, not something happening now.
+    var openTime = 0, openLocal = 0, lastFrameAt = Date.now();
+    function connect() {
+      if (es) { try { es.close(); } catch (err) {} }
+      openTime = 0;
+      lastFrameAt = Date.now();
+      es = new EventSource(NTFY_BASE + "/sse?since=12h");
+      es.addEventListener("open", function (e) {
+        lastFrameAt = Date.now();
+        if (!e.data) return;
+        try { openTime = JSON.parse(e.data).time || 0; openLocal = Date.now(); } catch (err) {}
+      });
+      es.addEventListener("keepalive", function () { lastFrameAt = Date.now(); });
+      es.onopen = function () { setConnStatus("online"); };
+      es.onerror = function () { setConnStatus("offline"); };
+      es.onmessage = function (e) {
+        lastFrameAt = Date.now();
+        var frame;
+        try { frame = JSON.parse(e.data); } catch (err) { return; }
+        if (frame.event !== "message" || !frame.message) return;
+        var payload;
+        try { payload = JSON.parse(b64Decode(frame.message)); } catch (err) { return; }
+        var age = openTime ? openTime + (Date.now() - openLocal) / 1000 - frame.time : 0;
+        if (payload && payload.type === "chunk") {
+          var buf = chunkBuf[payload.cid] || (chunkBuf[payload.cid] = { parts: [], got: 0 });
+          if (buf.parts[payload.i] === undefined) { buf.parts[payload.i] = payload.d; buf.got++; }
+          if (buf.got < payload.n) return;
+          delete chunkBuf[payload.cid];
+          try { payload = JSON.parse(buf.parts.join("")); } catch (err) { return; }
+        }
+        if (payload && typeof payload === "object") {
+          payload._stale = age > STALE_SEC;       // too old to act on at all
+          payload._replayed = age > REPLAY_SEC;   // old enough to count as history (no popups)
+        }
+        next(payload);
+      };
+    }
+    connect();
+    // If the connection silently dies (sleeping tablet, wifi hiccup), reopen it. Missed
+    // messages are replayed on reconnect, so nothing recent is lost.
+    setInterval(function () { if (Date.now() - lastFrameAt > 90000) connect(); }, 15000);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible" && Date.now() - lastFrameAt > 45000) connect();
     });
-    es.onopen = function () { setConnStatus("online"); };
-    es.onerror = function () { setConnStatus("offline"); };
-    es.onmessage = function (e) {
-      var frame;
-      try { frame = JSON.parse(e.data); } catch (err) { return; }
-      if (frame.event !== "message" || !frame.message) return;
-      var payload;
-      try { payload = JSON.parse(b64Decode(frame.message)); } catch (err) { return; }
-      var replayed = !!(openTime && frame.time < openTime);
-      var stale = !!(openTime && openTime - frame.time > STALE_SEC);
-      if (payload && payload.type === "chunk") {
-        var buf = chunkBuf[payload.cid] || (chunkBuf[payload.cid] = { parts: [], got: 0 });
-        if (buf.parts[payload.i] === undefined) { buf.parts[payload.i] = payload.d; buf.got++; }
-        if (buf.got < payload.n) return;
-        delete chunkBuf[payload.cid];
-        try { payload = JSON.parse(buf.parts.join("")); } catch (err) { return; }
-      }
-      if (payload && typeof payload === "object") {
-        payload._replayed = replayed;
-        payload._stale = stale;
-      }
-      next(payload);
-    };
-    return es;
   }
 
   // ---- live camera / intercom (WebRTC; the handshake travels over the same channel) ----
   var RTC_CONFIG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
   var RTC_MAX_MS = 120000;       // camera view shuts itself off after 2 minutes
   var INTERCOM_MS = 30000;       // student-started intercom lasts 30 seconds
-  var RTC_MAX_AGE_MS = 30000;    // ignore handshake messages older than this (page reload replays)
   function waitIceComplete(pc, maxMs) {
     return new Promise(function (resolve) {
       if (pc.iceGatheringState === "complete") return resolve();
@@ -1015,7 +1031,7 @@
       callStore[payload.id] = {
         id: payload.id, teacher: payload.teacher,
         calledAt: payload.calledAt, acknowledged: false, acknowledgedAt: null,
-        stale: !!payload._stale
+        stale: !!payload._stale, replayed: !!payload._replayed
       };
     } else if (payload.type === "ack") {
       var existing = callStore[payload.id];
@@ -1103,7 +1119,9 @@
           poppedUnavailable[doc.id] = true;
           if (!doc.replayedAck) showUnavailablePopup(doc); // never pop up for old history
         }
-        if (doc && !doc.acknowledged && !doc.stale) {
+        // A call that was already in the history when this page opened isn't shown as
+        // "calling": refreshing this tablet must never look like it is calling someone.
+        if (doc && !doc.acknowledged && !doc.stale && !doc.replayed) {
           card.setAttribute("data-state", "waiting");
           var secs = Math.max(0, Math.floor((now - doc.calledAt) / 1000));
           statusEl.textContent = "호출 중… " + secs + "초";
@@ -1132,9 +1150,7 @@
     function handleAnnounce(payload) {
       if (!payload.id || announced[payload.id]) return;
       announced[payload.id] = true;
-      if (payload._replayed) return;
-      // Ignore old events replayed when the page (re)loads.
-      if (Date.now() - payload.at > ANNOUNCE_MAX_AGE_MS) return;
+      if (payload._replayed) return; // old history replayed on reload: don't play it again
       document.getElementById("announce-overlay").hidden = false;
       clearTimeout(announceHideTimer);
       announceHideTimer = setTimeout(function () {
@@ -1243,13 +1259,19 @@
     }
     function handleRtc(p) {
       if (p.kind === "offer") {
-        if (seenSids[p.sid] || p._replayed || Date.now() - p.at > RTC_MAX_AGE_MS) return;
+        if (seenSids[p.sid] || p._stale) return;
         seenSids[p.sid] = true;
         camStart(p);
       } else if (p.kind === "stop" && p.sid === cam.sid) {
         camStop();
       }
     }
+    // Student hangs up before the time is up: tell the teacher tablet and shut the camera.
+    document.getElementById("cam-end").addEventListener("click", function () {
+      if (cam.sid) publish({ type: "rtc", kind: "stop", sid: cam.sid, at: Date.now() }).catch(function () {});
+      camStop();
+      showToast("인터폰을 끊었어요");
+    });
     document.getElementById("cam-mic").addEventListener("click", function () {
       if (!cam.stream) return;
       var muted = !this.classList.contains("muted");
@@ -1279,9 +1301,13 @@
       render();
     });
 
+    var callerStartedAt = Date.now();
     grid.addEventListener("click", function (e) {
       var card = e.target.closest(".teacher-card");
       if (!card) return;
+      // Ignore taps that land while the page is still loading (e.g. the tap that
+      // chose the role or refreshed the page) so nobody gets called by accident.
+      if (!e.isTrusted || Date.now() - callerStartedAt < 1200) return;
       unlockCallerAudio();
       var name = card.getAttribute("data-name");
       var now = Date.now();
@@ -1357,9 +1383,10 @@
       if (notify && view.sid) publish({ type: "rtc", kind: "stop", sid: view.sid, at: Date.now() }).catch(function () {});
       clearTimeout(view.timer);
       clearTimeout(view.answerTimer);
+      clearTimeout(view.retryTimer);
       if (view.pc) { try { view.pc.close(); } catch (e) {} }
       stopStream(view.mic);
-      view = { pc: null, sid: null, mic: null, timer: null, answerTimer: null, connected: false };
+      view = { pc: null, sid: null, mic: null, timer: null, answerTimer: null, retryTimer: null, connected: false };
       viewVideo.srcObject = null;
       document.getElementById("view-audio").srcObject = null;
       viewOverlay.hidden = true;
@@ -1407,14 +1434,23 @@
         await pc.setLocalDescription(offer);
         await waitIceComplete(pc, 3000);
         if (view.pc !== pc) return;
-        await publish({ type: "rtc", kind: "offer", sid: sid, at: Date.now(), limitMs: maxMs, sdp: pc.localDescription.sdp });
+        var offerPayload = { type: "rtc", kind: "offer", sid: sid, at: Date.now(), limitMs: maxMs, sdp: pc.localDescription.sdp };
+        await publish(offerPayload);
+        // No answer yet? Send the request again (the student tablet ignores duplicates),
+        // in case its connection was briefly down when the first one went out.
+        view.retryTimer = setTimeout(function () {
+          if (view.pc === pc && !view.connected && pc.signalingState === "have-local-offer") {
+            viewStatus.textContent = "밖 태블릿에 다시 연결을 시도하고 있어요…";
+            publish(offerPayload).catch(function () {});
+          }
+        }, 7000);
       } catch (e) {
         viewStatus.textContent = "연결을 시작하지 못했어요";
         return;
       }
       view.answerTimer = setTimeout(function () {
-        if (view.pc === pc && !view.connected) viewStatus.textContent = "밖 태블릿이 응답하지 않아요. 켜져 있는지 확인해 주세요";
-      }, 15000);
+        if (view.pc === pc && !view.connected) viewStatus.textContent = "밖 태블릿이 응답하지 않아요. 밖 태블릿 화면이 켜져 있고 이 페이지가 열려 있는지 확인해 주세요";
+      }, 20000);
       view.timer = setTimeout(function () {
         viewStop(true);
         showToast(maxMs < 60000 ? "30초가 지나 인터폰을 껐어요" : "2분이 지나 카메라를 껐어요");
@@ -1424,7 +1460,7 @@
     var seenRequests = {};
     function handleRtc(p) {
       if (p.kind === "request") {
-        if (seenRequests[p.sid] || p._replayed || Date.now() - p.at > RTC_MAX_AGE_MS) return;
+        if (seenRequests[p.sid] || p._stale) return;
         seenRequests[p.sid] = true;
         if (view.pc) return; // already connected
         playChime();
@@ -1436,10 +1472,14 @@
       if (p.kind === "answer") {
         if (view.pc.signalingState !== "have-local-offer") return;
         clearTimeout(view.answerTimer);
+        clearTimeout(view.retryTimer);
         viewStatus.textContent = "영상 받는 중…";
         view.pc.setRemoteDescription({ type: "answer", sdp: p.sdp }).catch(function () {
           viewStatus.textContent = "연결에 실패했어요";
         });
+      } else if (p.kind === "stop") {
+        viewStop(false);
+        showToast("학생이 인터폰을 끊었어요");
       } else if (p.kind === "error") {
         clearTimeout(view.answerTimer);
         viewStatus.textContent = p.msg || "연결할 수 없어요";
