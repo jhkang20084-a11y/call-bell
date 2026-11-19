@@ -639,9 +639,10 @@
   var STALE_SEC = 30;   // a message already this old when received is ignored
   var REPLAY_SEC = 15;  // older than this counts as history: no popups/sounds for it
   var ANNOUNCE_TEXT = "학생 여러분, 교실로 돌아가세요. 교실로 돌아가세요. 교무실 앞에서는 조용히 해 주세요.";
-  // Public pub/sub channel (ntfy.sh) — long random name so nobody can guess it.
-  var NTFY_TOPIC = "gyomusil-hobul-706c5e98ed0185566eb27ff052cd3fbf";
-  var NTFY_BASE = "https://ntfy.sh/" + NTFY_TOPIC;
+  // Message relay: a Firebase Realtime Database. ROOM is a long random name, so only
+  // this app's tablets share the same message list.
+  var DB_URL = "https://call-bell-hdhdd-default-rtdb.asia-southeast1.firebasedatabase.app";
+  var ROOM = "gyomusil-hobul-706c5e98ed0185566eb27ff052cd3fbf";
   var TEACHERS = [
     "송택수", "박예은", "최인선", "김보선", "허수빈",
     "강지현", "황선영", "김민진", "백효안", "이재석"
@@ -819,33 +820,10 @@
     if (document.visibilityState === "visible") requestWakeLock();
   });
 
-  // ---- unicode-safe base64 (ntfy bodies must not start with "{" or they get
-  // treated as a JSON file attachment instead of a plain message) ----
-  function b64Encode(str) {
-    return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, function (_, hex) {
-      return String.fromCharCode("0x" + hex);
-    }));
-  }
-  function b64Decode(str) {
-    return decodeURIComponent(atob(str).split("").map(function (c) {
-      return "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2);
-    }).join(""));
-  }
+  // ---- message relay: Firebase Realtime Database (plain REST + live stream, no SDK) ----
+  function roomUrl(path) { return DB_URL + "/rooms/" + ROOM + "/" + path; }
 
-  function post(json) {
-    return fetch(NTFY_BASE, { method: "POST", body: b64Encode(json) }).then(function (res) {
-      if (!res.ok) {
-        // fetch() does not reject on HTTP errors, so without this a refused message
-        // (daily limit reached) would look like it had been sent.
-        if (res.status === 429) showToast("오늘 보낼 수 있는 메시지 한도를 넘었어요. 잠시 뒤 또는 내일 다시 시도해 주세요.");
-        throw new Error("send failed: " + res.status);
-      }
-      return res;
-    });
-  }
-
-  // Camera handshakes are big; deflate them so each one fits in a single message
-  // (free relay allows only a limited number of messages per day).
+  // Camera handshakes are big; deflate them to keep each message small.
   function bytesToB64(bytes) {
     var bin = "";
     for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
@@ -876,74 +854,89 @@
     p.sdp = new TextDecoder().decode(await new Response(ds.readable).arrayBuffer());
     return p;
   }
-  // ntfy messages max out at ~4 KB, so big payloads (camera handshakes) are split
-  // into numbered chunks, sent in order, and reassembled by subscribe().
-  var CHUNK_SIZE = 1800;
+
   function publish(payload) {
-    var json = JSON.stringify(payload);
-    if (json.length <= 2900) return post(json); // ~3.9 KB once base64'd, under the relay's 4 KB message limit
-    var cid = Math.random().toString(36).slice(2, 10);
-    var n = Math.ceil(json.length / CHUNK_SIZE);
-    var chain = Promise.resolve();
-    for (var i = 0; i < n; i++) {
-      (function (i) {
-        chain = chain.then(function () {
-          return post(JSON.stringify({ type: "chunk", cid: cid, i: i, n: n, d: json.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE) }));
-        });
-      })(i);
-    }
-    return chain;
+    return fetch(roomUrl("msgs.json"), {
+      method: "POST",
+      body: JSON.stringify({ m: JSON.stringify(payload), t: { ".sv": "timestamp" } })
+    }).then(function (res) {
+      if (!res.ok) throw new Error("send failed: " + res.status);
+      return res;
+    }).catch(function (err) {
+      showToast("전송에 실패했어요. 인터넷 연결을 확인해 주세요.");
+      throw err;
+    });
+  }
+
+  // Message age is measured on the server's clock, so a tablet with a wrong clock
+  // still behaves. Something already old when we receive it is replayed history.
+  var serverOffset = 0; // server clock minus this tablet's clock, in ms
+  function syncClock() {
+    var id = Math.random().toString(36).slice(2, 10);
+    var t0 = Date.now();
+    return fetch(roomUrl("clock/" + id + ".json"), { method: "PUT", body: JSON.stringify({ ".sv": "timestamp" }) })
+      .then(function (r) { return r.json(); })
+      .then(function (ts) {
+        if (typeof ts === "number") serverOffset = ts - (t0 + Date.now()) / 2;
+        fetch(roomUrl("clock/" + id + ".json"), { method: "DELETE" }).catch(function () {});
+      }).catch(function () {});
+  }
+  // Keep the database small: drop messages older than two days.
+  function cleanupOldMessages() {
+    var cutoff = Math.floor(Date.now() + serverOffset - 2 * 24 * 3600 * 1000);
+    fetch(roomUrl("msgs.json") + "?orderBy=%22t%22&endAt=" + cutoff)
+      .then(function (r) { return r.json(); })
+      .then(function (old) {
+        if (!old || typeof old !== "object" || old.error) return;
+        var patch = {};
+        Object.keys(old).forEach(function (k) { patch[k] = null; });
+        if (Object.keys(patch).length) return fetch(roomUrl("msgs.json"), { method: "PATCH", body: JSON.stringify(patch) });
+      }).catch(function () {});
   }
 
   // `next` receives each event payload in order (oldest first, then live).
   function subscribe(next) {
-    var es = null;
-    var chunkBuf = {};
-    // The server's "open" frame carries its clock. Message age is measured on the
-    // server's clock, so tablets with a wrong clock still behave. A message that is
-    // already old when we receive it is replayed history, not something happening now.
-    var openTime = 0, openLocal = 0, lastFrameAt = Date.now();
+    var es = null, lastFrameAt = Date.now(), seen = {};
+    function handle(key, v) {
+      if (seen[key]) return;
+      seen[key] = true;
+      if (!v || typeof v.m !== "string") return;
+      var payload;
+      try { payload = JSON.parse(v.m); } catch (err) { return; }
+      if (!payload || typeof payload !== "object") return;
+      var age = typeof v.t === "number" ? (Date.now() + serverOffset - v.t) / 1000 : 0;
+      payload._stale = age > STALE_SEC;       // too old to act on at all
+      payload._replayed = age > REPLAY_SEC;   // old enough to count as history (no popups)
+      next(payload);
+    }
+    function onEvent(e) {
+      lastFrameAt = Date.now();
+      var d;
+      try { d = JSON.parse(e.data); } catch (err) { return; }
+      if (!d || d.data == null || typeof d.path !== "string") return;
+      if (d.path === "/") {
+        Object.keys(d.data).sort().forEach(function (k) { handle(k, d.data[k]); });
+      } else {
+        var parts = d.path.split("/"); // "/-Nabc" -> ["", "-Nabc"]
+        if (parts.length === 2) handle(parts[1], d.data);
+      }
+    }
     function connect() {
       if (es) { try { es.close(); } catch (err) {} }
-      openTime = 0;
       lastFrameAt = Date.now();
-      es = new EventSource(NTFY_BASE + "/sse?since=12h");
-      es.addEventListener("open", function (e) {
-        lastFrameAt = Date.now();
-        if (!e.data) return;
-        try { openTime = JSON.parse(e.data).time || 0; openLocal = Date.now(); } catch (err) {}
-      });
-      es.addEventListener("keepalive", function () { lastFrameAt = Date.now(); });
+      es = new EventSource(roomUrl("msgs.json") + "?orderBy=%22%24key%22&limitToLast=200");
       es.onopen = function () { setConnStatus("online"); };
       es.onerror = function () { setConnStatus("offline"); };
-      es.onmessage = function (e) {
-        lastFrameAt = Date.now();
-        var frame;
-        try { frame = JSON.parse(e.data); } catch (err) { return; }
-        if (frame.event !== "message" || !frame.message) return;
-        var payload;
-        try { payload = JSON.parse(b64Decode(frame.message)); } catch (err) { return; }
-        var age = openTime ? openTime + (Date.now() - openLocal) / 1000 - frame.time : 0;
-        if (payload && payload.type === "chunk") {
-          var buf = chunkBuf[payload.cid] || (chunkBuf[payload.cid] = { parts: [], got: 0 });
-          if (buf.parts[payload.i] === undefined) { buf.parts[payload.i] = payload.d; buf.got++; }
-          if (buf.got < payload.n) return;
-          delete chunkBuf[payload.cid];
-          try { payload = JSON.parse(buf.parts.join("")); } catch (err) { return; }
-        }
-        if (payload && typeof payload === "object") {
-          payload._stale = age > STALE_SEC;       // too old to act on at all
-          payload._replayed = age > REPLAY_SEC;   // old enough to count as history (no popups)
-        }
-        next(payload);
-      };
+      es.addEventListener("put", onEvent);
+      es.addEventListener("patch", onEvent);
+      es.addEventListener("keep-alive", function () { lastFrameAt = Date.now(); });
     }
-    connect();
+    syncClock().then(connect);
     // If the connection silently dies (sleeping tablet, wifi hiccup), reopen it. Missed
-    // messages are replayed on reconnect, so nothing recent is lost.
-    setInterval(function () { if (Date.now() - lastFrameAt > 90000) connect(); }, 15000);
+    // messages arrive again on reconnect, and ones already handled are skipped.
+    setInterval(function () { if (es && Date.now() - lastFrameAt > 90000) connect(); }, 15000);
     document.addEventListener("visibilitychange", function () {
-      if (document.visibilityState === "visible" && Date.now() - lastFrameAt > 45000) connect();
+      if (es && document.visibilityState === "visible" && Date.now() - lastFrameAt > 45000) connect();
     });
   }
 
@@ -1649,6 +1642,7 @@
     }
 
     renderIdle();
+    setTimeout(cleanupOldMessages, 8000);
     subscribe(function (payload) {
       if (payload && payload.type === "rtc") { handleRtc(payload); return; }
       applyEvent(payload);
