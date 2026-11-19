@@ -833,14 +833,55 @@
   }
 
   function post(json) {
-    return fetch(NTFY_BASE, { method: "POST", body: b64Encode(json) });
+    return fetch(NTFY_BASE, { method: "POST", body: b64Encode(json) }).then(function (res) {
+      if (!res.ok) {
+        // fetch() does not reject on HTTP errors, so without this a refused message
+        // (daily limit reached) would look like it had been sent.
+        if (res.status === 429) showToast("오늘 보낼 수 있는 메시지 한도를 넘었어요. 잠시 뒤 또는 내일 다시 시도해 주세요.");
+        throw new Error("send failed: " + res.status);
+      }
+      return res;
+    });
+  }
+
+  // Camera handshakes are big; deflate them so each one fits in a single message
+  // (free relay allows only a limited number of messages per day).
+  function bytesToB64(bytes) {
+    var bin = "";
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+  async function packSdp(p) {
+    if (!p.sdp || typeof CompressionStream === "undefined") return p;
+    try {
+      var cs = new CompressionStream("deflate-raw");
+      var w = cs.writable.getWriter();
+      w.write(new TextEncoder().encode(p.sdp));
+      w.close();
+      var out = Object.assign({}, p);
+      out.sdpz = bytesToB64(new Uint8Array(await new Response(cs.readable).arrayBuffer()));
+      delete out.sdp;
+      return out;
+    } catch (e) { return p; }
+  }
+  async function unpackSdp(p) {
+    if (!p.sdpz) return p;
+    var bin = atob(p.sdpz);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    var ds = new DecompressionStream("deflate-raw");
+    var w = ds.writable.getWriter();
+    w.write(bytes);
+    w.close();
+    p.sdp = new TextDecoder().decode(await new Response(ds.readable).arrayBuffer());
+    return p;
   }
   // ntfy messages max out at ~4 KB, so big payloads (camera handshakes) are split
   // into numbered chunks, sent in order, and reassembled by subscribe().
   var CHUNK_SIZE = 1800;
   function publish(payload) {
     var json = JSON.stringify(payload);
-    if (json.length <= 2400) return post(json);
+    if (json.length <= 2900) return post(json); // ~3.9 KB once base64'd, under the relay's 4 KB message limit
     var cid = Math.random().toString(36).slice(2, 10);
     var n = Math.ceil(json.length / CHUNK_SIZE);
     var chain = Promise.resolve();
@@ -1200,6 +1241,7 @@
     async function camStart(offer) {
       camStop();
       var sid = offer.sid;
+      try { offer = await unpackSdp(offer); } catch (e) { return; }
       cam.sid = sid;
       var stream;
       var videoOpts = { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } };
@@ -1237,7 +1279,7 @@
         await pc.setLocalDescription(answer);
         await waitIceComplete(pc, 3000);
         if (cam.pc !== pc) return;
-        await publish({ type: "rtc", kind: "answer", sid: sid, at: Date.now(), sdp: pc.localDescription.sdp });
+        await publish(await packSdp({ type: "rtc", kind: "answer", sid: sid, at: Date.now(), sdp: pc.localDescription.sdp }));
       } catch (e) {
         camStop();
         return;
@@ -1427,14 +1469,16 @@
         viewStatus.textContent = "";
       };
       pc.onconnectionstatechange = function () {
-        if (view.pc === pc && pc.connectionState === "failed") viewStatus.textContent = "연결이 끊겼어요. 닫고 다시 시도해 주세요";
+        if (view.pc === pc && pc.connectionState === "failed") {
+          viewStatus.textContent = "영상 연결에 실패했어요. 두 태블릿이 같은 와이파이인지 확인하고 닫은 뒤 다시 시도해 주세요";
+        }
       };
       try {
         var offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         await waitIceComplete(pc, 3000);
         if (view.pc !== pc) return;
-        var offerPayload = { type: "rtc", kind: "offer", sid: sid, at: Date.now(), limitMs: maxMs, sdp: pc.localDescription.sdp };
+        var offerPayload = await packSdp({ type: "rtc", kind: "offer", sid: sid, at: Date.now(), limitMs: maxMs, sdp: pc.localDescription.sdp });
         await publish(offerPayload);
         // No answer yet? Send the request again (the student tablet ignores duplicates),
         // in case its connection was briefly down when the first one went out.
@@ -1474,7 +1518,10 @@
         clearTimeout(view.answerTimer);
         clearTimeout(view.retryTimer);
         viewStatus.textContent = "영상 받는 중…";
-        view.pc.setRemoteDescription({ type: "answer", sdp: p.sdp }).catch(function () {
+        var answerPc = view.pc;
+        unpackSdp(p).then(function (full) {
+          return answerPc.setRemoteDescription({ type: "answer", sdp: full.sdp });
+        }).catch(function () {
           viewStatus.textContent = "연결에 실패했어요";
         });
       } else if (p.kind === "stop") {
