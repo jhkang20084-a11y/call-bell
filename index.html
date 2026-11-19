@@ -346,6 +346,8 @@
     font-weight: 700;
     box-shadow: 0 4px 18px rgba(0,0,0,.4);
   }
+  .cam-mic{ background: rgba(255,255,255,.22); color: #fff; font-size: .85rem; font-weight: 700; padding: .45rem .8rem; border-radius: 999px; }
+  .cam-mic.muted{ background: rgba(0,0,0,.35); text-decoration: line-through; }
   .rec-dot{ width: 10px; height: 10px; border-radius: 50%; background: #fff; animation: breathe 1s ease-in-out infinite; }
   .cam-preview{ width: 72px; height: 54px; object-fit: cover; border-radius: 999px; background: #000; transform: scaleX(-1); }
 
@@ -500,6 +502,7 @@
     <div class="caller-heading display">선생님을 선택하세요</div>
   </div>
   <div id="teacher-grid" class="teacher-grid"></div>
+  <button id="intercom-btn" class="view-btn">📞 인터폰으로 선생님과 이야기하기</button>
 </div>
 
 <div id="unavailable-overlay" class="diag-overlay" hidden>
@@ -534,10 +537,23 @@
 
 <div id="cam-banner" class="cam-banner" hidden>
   <span class="rec-dot"></span>
-  <span>📷 카메라 켜짐 · 선생님이 밖을 보고 있어요</span>
+  <span>📷 카메라·마이크 켜짐 · 선생님과 연결됐어요</span>
+  <button id="cam-mic" class="cam-mic">🎤 켜짐</button>
   <video id="cam-preview" class="cam-preview" autoplay playsinline muted></video>
 </div>
 <audio id="remote-audio" autoplay></audio>
+<audio id="view-audio" autoplay></audio>
+
+<div id="intercom-overlay" class="diag-overlay" hidden>
+  <div class="diag-panel" style="text-align: center;">
+    <div style="font-size: 3.4rem;">📞</div>
+    <h2 class="display" style="margin-top: .8rem;">학생이 인터폰으로 부르고 있어요</h2>
+    <div class="diag-actions">
+      <button id="intercom-later" class="secondary">나중에</button>
+      <button id="intercom-accept">받기</button>
+    </div>
+  </div>
+</div>
 
 <div id="view-overlay" class="view-overlay" hidden>
   <video id="view-video" class="view-video" autoplay playsinline muted></video>
@@ -790,9 +806,9 @@
   document.getElementById("diag-cam").addEventListener("click", async function () {
     var wantVideo = getRole() === "caller";
     try {
-      var s = await navigator.mediaDevices.getUserMedia(wantVideo ? { video: true } : { audio: true });
+      var s = await navigator.mediaDevices.getUserMedia(wantVideo ? { video: true, audio: true } : { audio: true });
       stopStream(s);
-      showToast(wantVideo ? "카메라를 쓸 수 있어요 ✅" : "마이크를 쓸 수 있어요 ✅");
+      showToast(wantVideo ? "카메라·마이크를 쓸 수 있어요 ✅" : "마이크를 쓸 수 있어요 ✅");
     } catch (e) {
       showToast("권한이 없어요. 브라우저 설정에서 허용해 주세요.");
     }
@@ -1160,12 +1176,18 @@
       var sid = offer.sid;
       cam.sid = sid;
       var stream;
+      var videoOpts = { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } };
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+        // camera + microphone so students can talk back; fall back to camera only
+        stream = await navigator.mediaDevices.getUserMedia({ video: videoOpts, audio: { echoCancellation: true } });
       } catch (e) {
-        cam.sid = null;
-        publish({ type: "rtc", kind: "error", sid: sid, at: Date.now(), msg: "밖 태블릿 카메라를 켤 수 없어요. 카메라 권한을 확인해 주세요." }).catch(function () {});
-        return;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: videoOpts, audio: false });
+        } catch (e2) {
+          cam.sid = null;
+          publish({ type: "rtc", kind: "error", sid: sid, at: Date.now(), msg: "밖 태블릿 카메라를 켤 수 없어요. 카메라 권한을 확인해 주세요." }).catch(function () {});
+          return;
+        }
       }
       if (cam.sid !== sid) { stopStream(stream); return; }
       cam.stream = stream;
@@ -1195,6 +1217,10 @@
         return;
       }
       document.getElementById("cam-preview").srcObject = stream;
+      var micBtn = document.getElementById("cam-mic");
+      micBtn.hidden = stream.getAudioTracks().length === 0;
+      micBtn.classList.remove("muted");
+      micBtn.textContent = "🎤 켜짐";
       camBanner.hidden = false;
       cam.timer = setTimeout(camStop, RTC_MAX_MS + 10000);
     }
@@ -1207,6 +1233,26 @@
         camStop();
       }
     }
+    document.getElementById("cam-mic").addEventListener("click", function () {
+      if (!cam.stream) return;
+      var muted = !this.classList.contains("muted");
+      cam.stream.getAudioTracks().forEach(function (t) { t.enabled = !muted; });
+      this.classList.toggle("muted", muted);
+      this.textContent = muted ? "🎤 꺼짐" : "🎤 켜짐";
+    });
+
+    // Student asks to talk to the teacher: the teacher gets a prompt and opens the intercom.
+    var intercomBtn = document.getElementById("intercom-btn");
+    intercomBtn.addEventListener("click", function () {
+      unlockCallerAudio();
+      intercomBtn.disabled = true;
+      setTimeout(function () { intercomBtn.disabled = false; }, 30000);
+      showToast("선생님을 부르고 있어요 📞");
+      publish({ type: "rtc", kind: "request", sid: newSid(), at: Date.now() }).catch(function () {
+        showToast("연결 요청에 실패했어요. 다시 눌러주세요.");
+        intercomBtn.disabled = false;
+      });
+    });
 
     setInterval(render, 1000);
     subscribe(function (payload) {
@@ -1298,6 +1344,7 @@
       stopStream(view.mic);
       view = { pc: null, sid: null, mic: null, timer: null, answerTimer: null, connected: false };
       viewVideo.srcObject = null;
+      document.getElementById("view-audio").srcObject = null;
       viewOverlay.hidden = true;
       talkBtn.hidden = true;
       talkBtn.classList.remove("on");
@@ -1313,16 +1360,22 @@
       view.sid = sid;
       pc.addTransceiver("video", { direction: "recvonly" });
       try {
-        var mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+        var mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
         if (view.pc !== pc) { stopStream(mic); return; }
         mic.getAudioTracks().forEach(function (t) { t.enabled = false; pc.addTrack(t, mic); });
         view.mic = mic;
         talkBtn.hidden = false;
       } catch (e) {
         talkBtn.hidden = true;
+        pc.addTransceiver("audio", { direction: "recvonly" }); // can't talk, but can still hear the students
       }
       pc.ontrack = function (e) {
-        if (e.track.kind !== "video") return;
+        if (e.track.kind === "audio") {
+          var viewAudio = document.getElementById("view-audio");
+          viewAudio.srcObject = e.streams[0] || new MediaStream([e.track]);
+          viewAudio.play().catch(function () {});
+          return;
+        }
         viewVideo.srcObject = e.streams[0] || new MediaStream([e.track]);
         viewVideo.play().catch(function () {});
         view.connected = true;
@@ -1346,7 +1399,29 @@
       }, 15000);
       view.timer = setTimeout(function () { viewStop(true); showToast("2분이 지나 카메라를 껐어요"); }, RTC_MAX_MS);
     }
+    var intercomOverlay = document.getElementById("intercom-overlay");
+    var seenRequests = {};
+    var intercomTimer = null;
+    function hideIntercomRequest() {
+      clearTimeout(intercomTimer);
+      intercomOverlay.hidden = true;
+    }
+    document.getElementById("intercom-later").addEventListener("click", hideIntercomRequest);
+    document.getElementById("intercom-accept").addEventListener("click", function () {
+      hideIntercomRequest();
+      viewStart();
+    });
     function handleRtc(p) {
+      if (p.kind === "request") {
+        if (seenRequests[p.sid] || Date.now() - p.at > RTC_MAX_AGE_MS) return;
+        seenRequests[p.sid] = true;
+        intercomOverlay.hidden = false;
+        clearTimeout(intercomTimer);
+        intercomTimer = setTimeout(hideIntercomRequest, 30000);
+        playChime();
+        speak("학생이 인터폰으로 부르고 있어요");
+        return;
+      }
       if (!view.pc || p.sid !== view.sid) return;
       if (p.kind === "answer") {
         if (view.pc.signalingState !== "have-local-offer") return;
