@@ -537,23 +537,13 @@
 
 <div id="cam-banner" class="cam-banner" hidden>
   <span class="rec-dot"></span>
-  <span>📷 카메라·마이크 켜짐 · 선생님과 연결됐어요</span>
+  <span>📷 카메라·마이크 켜짐 · 선생님과 연결됐어요<span id="cam-left"></span></span>
   <button id="cam-mic" class="cam-mic">🎤 켜짐</button>
   <video id="cam-preview" class="cam-preview" autoplay playsinline muted></video>
 </div>
 <audio id="remote-audio" autoplay></audio>
 <audio id="view-audio" autoplay></audio>
 
-<div id="intercom-overlay" class="diag-overlay" hidden>
-  <div class="diag-panel" style="text-align: center;">
-    <div style="font-size: 3.4rem;">📞</div>
-    <h2 class="display" style="margin-top: .8rem;">학생이 인터폰으로 부르고 있어요</h2>
-    <div class="diag-actions">
-      <button id="intercom-later" class="secondary">나중에</button>
-      <button id="intercom-accept">받기</button>
-    </div>
-  </div>
-</div>
 
 <div id="view-overlay" class="view-overlay" hidden>
   <video id="view-video" class="view-video" autoplay playsinline muted></video>
@@ -645,6 +635,7 @@
   var HISTORY_KEEP = 50;
   var AUTO_EXPIRE_MS = 30000;
   var ANNOUNCE_MAX_AGE_MS = 30000;
+  var STALE_SEC = 30; // a call that was already this old when the page opened is ignored
   var ANNOUNCE_TEXT = "학생 여러분, 교실로 돌아가세요. 교실로 돌아가세요. 교무실 앞에서는 조용히 해 주세요.";
   // Public pub/sub channel (ntfy.sh) — long random name so nobody can guess it.
   var NTFY_TOPIC = "gyomusil-hobul-706c5e98ed0185566eb27ff052cd3fbf";
@@ -865,6 +856,13 @@
   function subscribe(next) {
     var es = new EventSource(NTFY_BASE + "/sse?since=12h");
     var chunkBuf = {};
+    // The server's "open" frame carries its clock. Anything older than that was
+    // replayed history (reload / reconnect), not something happening right now.
+    var openTime = 0;
+    es.addEventListener("open", function (e) {
+      if (!e.data) return;
+      try { openTime = JSON.parse(e.data).time || 0; } catch (err) {}
+    });
     es.onopen = function () { setConnStatus("online"); };
     es.onerror = function () { setConnStatus("offline"); };
     es.onmessage = function (e) {
@@ -873,12 +871,18 @@
       if (frame.event !== "message" || !frame.message) return;
       var payload;
       try { payload = JSON.parse(b64Decode(frame.message)); } catch (err) { return; }
+      var replayed = !!(openTime && frame.time < openTime);
+      var stale = !!(openTime && openTime - frame.time > STALE_SEC);
       if (payload && payload.type === "chunk") {
         var buf = chunkBuf[payload.cid] || (chunkBuf[payload.cid] = { parts: [], got: 0 });
         if (buf.parts[payload.i] === undefined) { buf.parts[payload.i] = payload.d; buf.got++; }
         if (buf.got < payload.n) return;
         delete chunkBuf[payload.cid];
         try { payload = JSON.parse(buf.parts.join("")); } catch (err) { return; }
+      }
+      if (payload && typeof payload === "object") {
+        payload._replayed = replayed;
+        payload._stale = stale;
       }
       next(payload);
     };
@@ -888,6 +892,7 @@
   // ---- live camera / intercom (WebRTC; the handshake travels over the same channel) ----
   var RTC_CONFIG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
   var RTC_MAX_MS = 120000;       // camera view shuts itself off after 2 minutes
+  var INTERCOM_MS = 30000;       // student-started intercom lasts 30 seconds
   var RTC_MAX_AGE_MS = 30000;    // ignore handshake messages older than this (page reload replays)
   function waitIceComplete(pc, maxMs) {
     return new Promise(function (resolve) {
@@ -1009,7 +1014,8 @@
     if (payload.type === "call") {
       callStore[payload.id] = {
         id: payload.id, teacher: payload.teacher,
-        calledAt: payload.calledAt, acknowledged: false, acknowledgedAt: null
+        calledAt: payload.calledAt, acknowledged: false, acknowledgedAt: null,
+        stale: !!payload._stale
       };
     } else if (payload.type === "ack") {
       var existing = callStore[payload.id];
@@ -1018,11 +1024,13 @@
         existing.acknowledgedAt = payload.acknowledgedAt;
         existing.missed = !!payload.missed;
         existing.unavailable = !!payload.unavailable;
+        existing.replayedAck = !!payload._replayed;
       } else {
         callStore[payload.id] = {
           id: payload.id, teacher: payload.teacher, calledAt: payload.calledAt,
           acknowledged: true, acknowledgedAt: payload.acknowledgedAt,
-          missed: !!payload.missed, unavailable: !!payload.unavailable
+          missed: !!payload.missed, unavailable: !!payload.unavailable,
+          replayedAck: !!payload._replayed
         };
       }
     }
@@ -1093,9 +1101,9 @@
         card.querySelector(".away-badge").hidden = !(awayState[name] && awayState[name].away);
         if (doc && doc.acknowledged && doc.unavailable && !poppedUnavailable[doc.id]) {
           poppedUnavailable[doc.id] = true;
-          showUnavailablePopup(doc);
+          if (!doc.replayedAck) showUnavailablePopup(doc); // never pop up for old history
         }
-        if (doc && !doc.acknowledged) {
+        if (doc && !doc.acknowledged && !doc.stale) {
           card.setAttribute("data-state", "waiting");
           var secs = Math.max(0, Math.floor((now - doc.calledAt) / 1000));
           statusEl.textContent = "호출 중… " + secs + "초";
@@ -1124,6 +1132,7 @@
     function handleAnnounce(payload) {
       if (!payload.id || announced[payload.id]) return;
       announced[payload.id] = true;
+      if (payload._replayed) return;
       // Ignore old events replayed when the page (re)loads.
       if (Date.now() - payload.at > ANNOUNCE_MAX_AGE_MS) return;
       document.getElementById("announce-overlay").hidden = false;
@@ -1159,9 +1168,10 @@
     var remoteAudio = document.getElementById("remote-audio");
     function camStop() {
       clearTimeout(cam.timer);
+      clearInterval(cam.tick);
       if (cam.pc) { try { cam.pc.close(); } catch (e) {} }
       stopStream(cam.stream);
-      cam = { pc: null, sid: null, stream: null, timer: null };
+      cam = { pc: null, sid: null, stream: null, timer: null, tick: null };
       camBanner.hidden = true;
       document.getElementById("cam-preview").srcObject = null;
       remoteAudio.srcObject = null;
@@ -1222,11 +1232,18 @@
       micBtn.classList.remove("muted");
       micBtn.textContent = "🎤 켜짐";
       camBanner.hidden = false;
-      cam.timer = setTimeout(camStop, RTC_MAX_MS + 10000);
+      var limit = offer.limitMs || RTC_MAX_MS;
+      var endAt = Date.now() + limit;
+      var leftEl = document.getElementById("cam-left");
+      cam.timer = setTimeout(camStop, limit + 3000);
+      clearInterval(cam.tick);
+      function showLeft() { leftEl.textContent = " (" + Math.max(0, Math.ceil((endAt - Date.now()) / 1000)) + "초)"; }
+      showLeft();
+      cam.tick = setInterval(showLeft, 1000);
     }
     function handleRtc(p) {
       if (p.kind === "offer") {
-        if (seenSids[p.sid] || Date.now() - p.at > RTC_MAX_AGE_MS) return;
+        if (seenSids[p.sid] || p._replayed || Date.now() - p.at > RTC_MAX_AGE_MS) return;
         seenSids[p.sid] = true;
         camStart(p);
       } else if (p.kind === "stop" && p.sid === cam.sid) {
@@ -1241,13 +1258,13 @@
       this.textContent = muted ? "🎤 꺼짐" : "🎤 켜짐";
     });
 
-    // Student asks to talk to the teacher: the teacher gets a prompt and opens the intercom.
+    // Student starts the intercom: the teacher tablet connects automatically for 30 seconds.
     var intercomBtn = document.getElementById("intercom-btn");
     intercomBtn.addEventListener("click", function () {
       unlockCallerAudio();
       intercomBtn.disabled = true;
       setTimeout(function () { intercomBtn.disabled = false; }, 30000);
-      showToast("선생님을 부르고 있어요 📞");
+      showToast("인터폰을 연결하고 있어요 📞 연결되면 30초 동안 말할 수 있어요");
       publish({ type: "rtc", kind: "request", sid: newSid(), at: Date.now() }).catch(function () {
         showToast("연결 요청에 실패했어요. 다시 눌러주세요.");
         intercomBtn.disabled = false;
@@ -1350,7 +1367,8 @@
       talkBtn.classList.remove("on");
       talkBtn.textContent = "🎤 말하기 켜기";
     }
-    async function viewStart() {
+    async function viewStart(maxMs) {
+      maxMs = typeof maxMs === "number" ? maxMs : RTC_MAX_MS;
       viewOverlay.hidden = false;
       if (view.pc) return;
       viewStatus.textContent = "연결 중…";
@@ -1389,7 +1407,7 @@
         await pc.setLocalDescription(offer);
         await waitIceComplete(pc, 3000);
         if (view.pc !== pc) return;
-        await publish({ type: "rtc", kind: "offer", sid: sid, at: Date.now(), sdp: pc.localDescription.sdp });
+        await publish({ type: "rtc", kind: "offer", sid: sid, at: Date.now(), limitMs: maxMs, sdp: pc.localDescription.sdp });
       } catch (e) {
         viewStatus.textContent = "연결을 시작하지 못했어요";
         return;
@@ -1397,29 +1415,21 @@
       view.answerTimer = setTimeout(function () {
         if (view.pc === pc && !view.connected) viewStatus.textContent = "밖 태블릿이 응답하지 않아요. 켜져 있는지 확인해 주세요";
       }, 15000);
-      view.timer = setTimeout(function () { viewStop(true); showToast("2분이 지나 카메라를 껐어요"); }, RTC_MAX_MS);
+      view.timer = setTimeout(function () {
+        viewStop(true);
+        showToast(maxMs < 60000 ? "30초가 지나 인터폰을 껐어요" : "2분이 지나 카메라를 껐어요");
+      }, maxMs);
     }
-    var intercomOverlay = document.getElementById("intercom-overlay");
+    // A student pressed the intercom button: connect right away, no need to accept; ends after 30 s.
     var seenRequests = {};
-    var intercomTimer = null;
-    function hideIntercomRequest() {
-      clearTimeout(intercomTimer);
-      intercomOverlay.hidden = true;
-    }
-    document.getElementById("intercom-later").addEventListener("click", hideIntercomRequest);
-    document.getElementById("intercom-accept").addEventListener("click", function () {
-      hideIntercomRequest();
-      viewStart();
-    });
     function handleRtc(p) {
       if (p.kind === "request") {
-        if (seenRequests[p.sid] || Date.now() - p.at > RTC_MAX_AGE_MS) return;
+        if (seenRequests[p.sid] || p._replayed || Date.now() - p.at > RTC_MAX_AGE_MS) return;
         seenRequests[p.sid] = true;
-        intercomOverlay.hidden = false;
-        clearTimeout(intercomTimer);
-        intercomTimer = setTimeout(hideIntercomRequest, 30000);
+        if (view.pc) return; // already connected
         playChime();
-        speak("학생이 인터폰으로 부르고 있어요");
+        speak("학생이 인터폰으로 말하고 있어요");
+        viewStart(INTERCOM_MS);
         return;
       }
       if (!view.pc || p.sid !== view.sid) return;
@@ -1538,7 +1548,7 @@
 
     function renderFromStore() {
       var pending = Object.keys(callStore).map(function (id) { return callStore[id]; })
-        .filter(function (d) { return !d.acknowledged; })
+        .filter(function (d) { return !d.acknowledged && !d.stale; })
         .sort(function (a, b) { return a.calledAt - b.calledAt; });
 
       if (pending.length > 0) {
