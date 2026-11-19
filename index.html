@@ -256,6 +256,98 @@
     border-radius: 999px;
   }
   .unavailable-btn:active{ transform: scale(0.97); }
+  .announce-btn{
+    background: var(--accent);
+    color: #08130e;
+    font-family: "Do Hyeon", sans-serif;
+    font-size: 1.2rem;
+    padding: 1rem 2rem;
+    border-radius: 999px;
+    max-width: 90vw;
+  }
+  .announce-btn:active{ transform: scale(0.97); }
+  .announce-btn:disabled{ opacity: .5; }
+  .view-btn{
+    background: transparent;
+    color: var(--text);
+    border: 2px solid var(--text-dim);
+    font-family: "Do Hyeon", sans-serif;
+    font-size: 1.15rem;
+    padding: 1rem 1.8rem;
+    border-radius: 999px;
+  }
+  .view-btn:active{ transform: scale(0.97); }
+
+  /* ---------- live camera (teacher side) ---------- */
+  .view-overlay{
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background: #000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  .view-video{ width: 100%; flex: 1; min-height: 0; object-fit: contain; background: #000; }
+  .view-status{
+    position: absolute;
+    top: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,.65);
+    color: var(--text);
+    padding: .5rem 1.1rem;
+    border-radius: 999px;
+    font-size: .95rem;
+  }
+  .view-status:empty{ display: none; }
+  .view-actions{ display: flex; gap: .9rem; padding: 1rem; justify-content: center; flex-wrap: wrap; width: 100%; background: var(--bg); }
+  .view-talk, .view-close{
+    font-family: "Do Hyeon", sans-serif;
+    font-size: 1.3rem;
+    padding: 1rem 2rem;
+    border-radius: 999px;
+  }
+  .view-talk{ background: var(--surface-raised); color: var(--text); border: 2px solid var(--border); }
+  .view-talk.on{ background: var(--alert); color: #fff; border-color: var(--alert); }
+  .view-close{ background: var(--text); color: #1a0705; }
+
+  .pw-input{
+    width: 100%;
+    margin-top: .6rem;
+    padding: .8rem 1rem;
+    font-size: 1.4rem;
+    text-align: center;
+    letter-spacing: .3em;
+    background: var(--surface-raised);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    user-select: text;
+  }
+  .pw-error{ min-height: 1.3rem; margin-top: .5rem; color: var(--alert); font-size: .9rem; }
+
+  /* ---------- camera-on banner (student side) ---------- */
+  .cam-banner{
+    position: fixed;
+    top: .8rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 55;
+    display: flex;
+    align-items: center;
+    gap: .7rem;
+    background: var(--alert);
+    color: #fff;
+    padding: .5rem .6rem .5rem 1rem;
+    border-radius: 999px;
+    font-size: .95rem;
+    font-weight: 700;
+    box-shadow: 0 4px 18px rgba(0,0,0,.4);
+  }
+  .rec-dot{ width: 10px; height: 10px; border-radius: 50%; background: #fff; animation: breathe 1s ease-in-out infinite; }
+  .cam-preview{ width: 72px; height: 54px; object-fit: cover; border-radius: 999px; background: #000; transform: scaleX(-1); }
 
   /* ---------- shared ---------- */
   .toast{
@@ -326,6 +418,18 @@
   .diag-value{ text-align: right; font-weight: 700; word-break: break-word; }
   .diag-value.bad{ color: var(--alert); }
   .diag-value.good{ color: var(--accent); }
+  .diag-select{
+    flex: 1;
+    min-width: 0;
+    max-width: 65%;
+    background: var(--surface-raised);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: .5rem .6rem;
+    font-family: inherit;
+    font-size: .9rem;
+  }
   .diag-voices{ margin-top: .8rem; padding: .8rem; background: var(--surface-raised); border-radius: 10px; font-size: .82rem; color: var(--text-dim); max-height: 140px; overflow-y: auto; }
   .diag-voices div{ padding: .15rem 0; }
   .diag-actions{ display: flex; gap: .7rem; margin-top: 1.2rem; flex-wrap: wrap; }
@@ -407,6 +511,43 @@
   </div>
 </div>
 
+<div id="announce-overlay" class="diag-overlay" hidden>
+  <div class="diag-panel" style="text-align: center;">
+    <div style="font-size: 3.4rem;">📢</div>
+    <h2 class="display" style="margin-top: .8rem; line-height: 1.5;">학생 여러분,<br>교실로 돌아가세요</h2>
+    <div class="role-sub" style="margin-bottom: 1.2rem;">교무실 앞에서는 조용히 해 주세요</div>
+    <button id="announce-dismiss" class="start-btn" style="width: 100%;">확인</button>
+  </div>
+</div>
+
+<div id="pw-overlay" class="diag-overlay" style="z-index: 70;" hidden>
+  <div class="diag-panel" style="text-align: center;">
+    <h2 class="display">🔒 비밀번호를 입력하세요</h2>
+    <input id="pw-input" class="pw-input" type="password" inputmode="numeric" autocomplete="off">
+    <div id="pw-error" class="pw-error"></div>
+    <div class="diag-actions">
+      <button id="pw-cancel" class="secondary">취소</button>
+      <button id="pw-ok">확인</button>
+    </div>
+  </div>
+</div>
+
+<div id="cam-banner" class="cam-banner" hidden>
+  <span class="rec-dot"></span>
+  <span>📷 카메라 켜짐 · 선생님이 밖을 보고 있어요</span>
+  <video id="cam-preview" class="cam-preview" autoplay playsinline muted></video>
+</div>
+<audio id="remote-audio" autoplay></audio>
+
+<div id="view-overlay" class="view-overlay" hidden>
+  <video id="view-video" class="view-video" autoplay playsinline muted></video>
+  <div id="view-status" class="view-status">연결 중…</div>
+  <div class="view-actions">
+    <button id="view-talk" class="view-talk" hidden>🎤 말하기 켜기</button>
+    <button id="view-close" class="view-close">닫기</button>
+  </div>
+</div>
+
 <div id="screen-receiver-start" class="screen" hidden>
   <div class="stack">
     <div class="idle-title display">수신 태블릿 준비</div>
@@ -419,6 +560,10 @@
   <div class="idle-row">
     <span class="idle-badge"></span>
     <span class="idle-title display">대기 중</span>
+  </div>
+  <div class="alert-actions">
+    <button class="view-open view-btn">👁 밖 보기</button>
+    <button id="announce-btn" class="announce-btn">📢 학생 방송: 교실로 돌아가세요</button>
   </div>
   <div class="history">
     <div class="history-head">선생님 재실 상태</div>
@@ -437,6 +582,7 @@
   <div class="alert-actions">
     <button id="ack-btn" class="ack-btn">확인했어요</button>
     <button id="unavailable-btn" class="unavailable-btn">🙅 안계십니다</button>
+    <button class="view-open view-btn">👁 밖 보기</button>
   </div>
   <div class="alert-hint">30초 안에 확인하지 않으면 자동으로 미확인 처리돼요</div>
 </div>
@@ -447,11 +593,20 @@
 </div>
 <div id="toast" class="toast"></div>
 <button id="reset-btn" class="reset-btn" hidden>기기 설정 초기화</button>
-<button id="diag-btn" class="diag-btn" hidden>🔧 음성 진단</button>
+<button id="diag-btn" class="diag-btn" hidden>🔧 음성 설정</button>
 
 <div id="diag-overlay" class="diag-overlay" hidden>
   <div class="diag-panel">
-    <h2 class="display">🔧 음성 진단</h2>
+    <h2 class="display">🔧 음성 설정</h2>
+    <div class="diag-row"><span class="diag-label">목소리</span><select id="voice-select" class="diag-select"></select></div>
+    <div class="diag-row">
+      <span class="diag-label">음높이</span>
+      <select id="pitch-select" class="diag-select">
+        <option value="1">보통</option>
+        <option value="1.5">높게</option>
+        <option value="2">아주 높게 (아기 목소리)</option>
+      </select>
+    </div>
     <div class="diag-row"><span class="diag-label">브라우저</span><span id="diag-ua" class="diag-value" style="font-weight:400; font-size:.78rem;"></span></div>
     <div class="diag-row"><span class="diag-label">음성 합성 지원</span><span id="diag-support" class="diag-value"></span></div>
     <div class="diag-row"><span class="diag-label">감지된 음성 수</span><span id="diag-count" class="diag-value"></span></div>
@@ -460,6 +615,7 @@
     <div class="diag-actions">
       <button id="diag-refresh" class="secondary">🔄 다시 검사</button>
       <button id="diag-test">▶️ 테스트 재생</button>
+      <button id="diag-cam" class="secondary">📷 카메라·마이크 권한 확인</button>
     </div>
     <button id="diag-close" class="diag-close">닫기</button>
   </div>
@@ -472,6 +628,8 @@
   var ACKED_DISPLAY_MS = 4000;
   var HISTORY_KEEP = 50;
   var AUTO_EXPIRE_MS = 30000;
+  var ANNOUNCE_MAX_AGE_MS = 30000;
+  var ANNOUNCE_TEXT = "학생 여러분, 교실로 돌아가세요. 교실로 돌아가세요. 교무실 앞에서는 조용히 해 주세요.";
   // Public pub/sub channel (ntfy.sh) — long random name so nobody can guess it.
   var NTFY_TOPIC = "gyomusil-hobul-706c5e98ed0185566eb27ff052cd3fbf";
   var NTFY_BASE = "https://ntfy.sh/" + NTFY_TOPIC;
@@ -519,10 +677,44 @@
 
   var resetBtn = document.getElementById("reset-btn");
   resetBtn.hidden = false;
-  resetBtn.addEventListener("click", function () {
+  // The student (caller) tablet needs a password before its role can be changed.
+  // Only a hash is stored here; this keeps students out, it is not strong security.
+  var RESET_PW_HASH = 3207242031185336;
+  function hashText(str) {
+    var h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (var i = 0, ch; i < str.length; i++) {
+      ch = str.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761);
+      h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+    h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+    h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+  }
+  function doReset() {
     try { localStorage.removeItem(ROLE_KEY); } catch (e) {}
     location.reload();
+  }
+  var pwOverlay = document.getElementById("pw-overlay");
+  var pwInput = document.getElementById("pw-input");
+  var pwError = document.getElementById("pw-error");
+  resetBtn.addEventListener("click", function () {
+    if (getRole() !== "caller") { doReset(); return; }
+    pwInput.value = "";
+    pwError.textContent = "";
+    pwOverlay.hidden = false;
+    pwInput.focus();
   });
+  function submitPassword() {
+    if (hashText(pwInput.value) === RESET_PW_HASH) { doReset(); return; }
+    pwError.textContent = "비밀번호가 맞지 않아요";
+    pwInput.value = "";
+  }
+  document.getElementById("pw-ok").addEventListener("click", submitPassword);
+  pwInput.addEventListener("keydown", function (e) { if (e.key === "Enter") submitPassword(); });
+  document.getElementById("pw-cancel").addEventListener("click", function () { pwOverlay.hidden = true; });
 
   // ---- voice diagnostics panel (for debugging silent TTS on a device) ----
   var diagBtn = document.getElementById("diag-btn");
@@ -549,7 +741,40 @@
     list.innerHTML = voices.length === 0
       ? "이 기기에서 사용 가능한 음성이 하나도 없어요."
       : voices.map(function (v) { return "<div>" + v.name + " — " + v.lang + "</div>"; }).join("");
+    populateVoiceControls();
   }
+  function populateVoiceControls() {
+    var sel = document.getElementById("voice-select");
+    var list = koreanVoices();
+    sel.innerHTML = "";
+    if (list.length === 0) {
+      var none = document.createElement("option");
+      none.textContent = "한국어 음성 없음";
+      sel.appendChild(none);
+      sel.disabled = true;
+    } else {
+      sel.disabled = false;
+      list.forEach(function (v, i) {
+        var opt = document.createElement("option");
+        opt.value = v.voiceURI;
+        opt.textContent = (i + 1) + ". " + v.name;
+        if (koVoice && koVoice.voiceURI === v.voiceURI) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    }
+    document.getElementById("pitch-select").value = String(speechPitch);
+  }
+  document.getElementById("voice-select").addEventListener("change", function (e) {
+    savedVoiceURI = e.target.value;
+    try { localStorage.setItem(VOICE_KEY, savedVoiceURI); } catch (err) {}
+    pickVoice();
+    speak(TEACHERS[0] + " 선생님");
+  });
+  document.getElementById("pitch-select").addEventListener("change", function (e) {
+    speechPitch = parseFloat(e.target.value);
+    try { localStorage.setItem(PITCH_KEY, String(speechPitch)); } catch (err) {}
+    speak(TEACHERS[0] + " 선생님");
+  });
   diagBtn.addEventListener("click", function () {
     diagOverlay.hidden = false;
     runDiagnostics();
@@ -561,6 +786,16 @@
   document.getElementById("diag-refresh").addEventListener("click", runDiagnostics);
   document.getElementById("diag-test").addEventListener("click", function () {
     speak("테스트, 하나 둘 셋");
+  });
+  document.getElementById("diag-cam").addEventListener("click", async function () {
+    var wantVideo = getRole() === "caller";
+    try {
+      var s = await navigator.mediaDevices.getUserMedia(wantVideo ? { video: true } : { audio: true });
+      stopStream(s);
+      showToast(wantVideo ? "카메라를 쓸 수 있어요 ✅" : "마이크를 쓸 수 있어요 ✅");
+    } catch (e) {
+      showToast("권한이 없어요. 브라우저 설정에서 허용해 주세요.");
+    }
   });
 
   var wakeLock = null;
@@ -588,13 +823,32 @@
     }).join(""));
   }
 
+  function post(json) {
+    return fetch(NTFY_BASE, { method: "POST", body: b64Encode(json) });
+  }
+  // ntfy messages max out at ~4 KB, so big payloads (camera handshakes) are split
+  // into numbered chunks, sent in order, and reassembled by subscribe().
+  var CHUNK_SIZE = 1800;
   function publish(payload) {
-    return fetch(NTFY_BASE, { method: "POST", body: b64Encode(JSON.stringify(payload)) });
+    var json = JSON.stringify(payload);
+    if (json.length <= 2400) return post(json);
+    var cid = Math.random().toString(36).slice(2, 10);
+    var n = Math.ceil(json.length / CHUNK_SIZE);
+    var chain = Promise.resolve();
+    for (var i = 0; i < n; i++) {
+      (function (i) {
+        chain = chain.then(function () {
+          return post(JSON.stringify({ type: "chunk", cid: cid, i: i, n: n, d: json.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE) }));
+        });
+      })(i);
+    }
+    return chain;
   }
 
   // `next` receives each event payload in order (oldest first, then live).
   function subscribe(next) {
     var es = new EventSource(NTFY_BASE + "/sse?since=12h");
+    var chunkBuf = {};
     es.onopen = function () { setConnStatus("online"); };
     es.onerror = function () { setConnStatus("offline"); };
     es.onmessage = function (e) {
@@ -603,10 +857,39 @@
       if (frame.event !== "message" || !frame.message) return;
       var payload;
       try { payload = JSON.parse(b64Decode(frame.message)); } catch (err) { return; }
+      if (payload && payload.type === "chunk") {
+        var buf = chunkBuf[payload.cid] || (chunkBuf[payload.cid] = { parts: [], got: 0 });
+        if (buf.parts[payload.i] === undefined) { buf.parts[payload.i] = payload.d; buf.got++; }
+        if (buf.got < payload.n) return;
+        delete chunkBuf[payload.cid];
+        try { payload = JSON.parse(buf.parts.join("")); } catch (err) { return; }
+      }
       next(payload);
     };
     return es;
   }
+
+  // ---- live camera / intercom (WebRTC; the handshake travels over the same channel) ----
+  var RTC_CONFIG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+  var RTC_MAX_MS = 120000;       // camera view shuts itself off after 2 minutes
+  var RTC_MAX_AGE_MS = 30000;    // ignore handshake messages older than this (page reload replays)
+  function waitIceComplete(pc, maxMs) {
+    return new Promise(function (resolve) {
+      if (pc.iceGatheringState === "complete") return resolve();
+      var timer = setTimeout(done, maxMs);
+      function done() {
+        pc.removeEventListener("icegatheringstatechange", check);
+        clearTimeout(timer);
+        resolve();
+      }
+      function check() { if (pc.iceGatheringState === "complete") done(); }
+      pc.addEventListener("icegatheringstatechange", check);
+    });
+  }
+  function stopStream(stream) {
+    if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+  }
+  function newSid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
   // ---- alert tone (unlocked by an explicit tap) ----
   var audioCtx = null;
@@ -642,13 +925,26 @@
   // silently drop speech if the SpeechSynthesisUtterance gets garbage
   // collected before it finishes (it's only weakly referenced internally).
   var activeUtterance = null;
-  function pickVoice() {
+  var VOICE_KEY = "callBellVoice";
+  var PITCH_KEY = "callBellPitch";
+  var savedVoiceURI = null;
+  var speechPitch = 2; // default: high pitch = cute baby-like voice
+  try {
+    savedVoiceURI = localStorage.getItem(VOICE_KEY);
+    var savedPitch = parseFloat(localStorage.getItem(PITCH_KEY));
+    if (savedPitch >= 0.5 && savedPitch <= 2) speechPitch = savedPitch;
+  } catch (e) {}
+  function koreanVoices() {
     try {
-      var voices = speechSynthesis.getVoices();
-      koVoice = voices.find(function (v) { return v.lang === "ko-KR"; }) ||
-                voices.find(function (v) { return v.lang && v.lang.indexOf("ko") === 0; }) ||
-                null;
-    } catch (e) {}
+      return speechSynthesis.getVoices().filter(function (v) {
+        return v.lang && v.lang.replace("_", "-").toLowerCase().indexOf("ko") === 0;
+      });
+    } catch (e) { return []; }
+  }
+  function pickVoice() {
+    var list = koreanVoices();
+    koVoice = list.find(function (v) { return v.voiceURI === savedVoiceURI; }) ||
+              list[0] || null;
   }
   if ("speechSynthesis" in window) {
     speechSynthesis.onvoiceschanged = pickVoice;
@@ -661,7 +957,8 @@
       var u = new SpeechSynthesisUtterance(text);
       u.lang = "ko-KR";
       if (koVoice) u.voice = koVoice;
-      u.rate = 0.95;
+      u.pitch = speechPitch;
+      u.rate = speechPitch > 1.5 ? 0.85 : 0.95;
       activeUtterance = u;
       speechSynthesis.speak(u);
     } catch (e) {}
@@ -720,7 +1017,7 @@
     }
   }
 
-  var role = getRole();
+  var role = new URLSearchParams(location.search).get("role") || getRole();
   if (role === "caller") startCaller();
   else if (role === "receiver") startReceiverGate();
   else showScreen("role");
@@ -805,21 +1102,124 @@
       });
     }
 
+    // Teacher pressed the "go back to class" broadcast: play it on this tablet.
+    var announced = {};
+    var announceHideTimer = null;
+    function handleAnnounce(payload) {
+      if (!payload.id || announced[payload.id]) return;
+      announced[payload.id] = true;
+      // Ignore old events replayed when the page (re)loads.
+      if (Date.now() - payload.at > ANNOUNCE_MAX_AGE_MS) return;
+      document.getElementById("announce-overlay").hidden = false;
+      clearTimeout(announceHideTimer);
+      announceHideTimer = setTimeout(function () {
+        document.getElementById("announce-overlay").hidden = true;
+      }, 25000);
+      playChime();
+      speak(ANNOUNCE_TEXT);
+    }
+    document.getElementById("announce-dismiss").addEventListener("click", function () {
+      document.getElementById("announce-overlay").hidden = true;
+      try { speechSynthesis.cancel(); } catch (e) {}
+    });
+
+    // Browsers only allow sound after a tap, so unlock on the first touch anywhere.
+    function unlockCallerAudio() {
+      if (callerAudioUnlocked) return;
+      callerAudioUnlocked = true;
+      unlockAudio();
+      try {
+        var warm = new SpeechSynthesisUtterance(" ");
+        warm.volume = 0;
+        speechSynthesis.speak(warm);
+      } catch (e) {}
+    }
+    document.addEventListener("pointerdown", unlockCallerAudio, { once: true });
+
+    // ---- live camera: teacher asked to look outside, so stream this tablet's camera ----
+    var cam = { pc: null, sid: null, stream: null, timer: null };
+    var seenSids = {};
+    var camBanner = document.getElementById("cam-banner");
+    var remoteAudio = document.getElementById("remote-audio");
+    function camStop() {
+      clearTimeout(cam.timer);
+      if (cam.pc) { try { cam.pc.close(); } catch (e) {} }
+      stopStream(cam.stream);
+      cam = { pc: null, sid: null, stream: null, timer: null };
+      camBanner.hidden = true;
+      document.getElementById("cam-preview").srcObject = null;
+      remoteAudio.srcObject = null;
+    }
+    function playRemoteAudio() {
+      remoteAudio.play().catch(function () {
+        document.addEventListener("pointerdown", function () { remoteAudio.play().catch(function () {}); }, { once: true });
+      });
+    }
+    async function camStart(offer) {
+      camStop();
+      var sid = offer.sid;
+      cam.sid = sid;
+      var stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+      } catch (e) {
+        cam.sid = null;
+        publish({ type: "rtc", kind: "error", sid: sid, at: Date.now(), msg: "밖 태블릿 카메라를 켤 수 없어요. 카메라 권한을 확인해 주세요." }).catch(function () {});
+        return;
+      }
+      if (cam.sid !== sid) { stopStream(stream); return; }
+      cam.stream = stream;
+      var pc = new RTCPeerConnection(RTC_CONFIG);
+      cam.pc = pc;
+      stream.getTracks().forEach(function (t) { pc.addTrack(t, stream); });
+      pc.ontrack = function (e) {
+        if (e.track.kind !== "audio") return;
+        remoteAudio.srcObject = e.streams[0] || new MediaStream([e.track]);
+        playRemoteAudio();
+      };
+      pc.onconnectionstatechange = function () {
+        if (pc.connectionState === "failed" || pc.connectionState === "closed") { if (cam.pc === pc) camStop(); }
+        else if (pc.connectionState === "disconnected") {
+          setTimeout(function () { if (cam.pc === pc && pc.connectionState === "disconnected") camStop(); }, 6000);
+        }
+      };
+      try {
+        await pc.setRemoteDescription({ type: "offer", sdp: offer.sdp });
+        var answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await waitIceComplete(pc, 3000);
+        if (cam.pc !== pc) return;
+        await publish({ type: "rtc", kind: "answer", sid: sid, at: Date.now(), sdp: pc.localDescription.sdp });
+      } catch (e) {
+        camStop();
+        return;
+      }
+      document.getElementById("cam-preview").srcObject = stream;
+      camBanner.hidden = false;
+      cam.timer = setTimeout(camStop, RTC_MAX_MS + 10000);
+    }
+    function handleRtc(p) {
+      if (p.kind === "offer") {
+        if (seenSids[p.sid] || Date.now() - p.at > RTC_MAX_AGE_MS) return;
+        seenSids[p.sid] = true;
+        camStart(p);
+      } else if (p.kind === "stop" && p.sid === cam.sid) {
+        camStop();
+      }
+    }
+
     setInterval(render, 1000);
-    subscribe(function (payload) { applyEvent(payload); render(); });
+    subscribe(function (payload) {
+      applyEvent(payload);
+      if (payload && payload.type === "announce") handleAnnounce(payload);
+      else if (payload && payload.type === "rtc") handleRtc(payload);
+      render();
+    });
 
     grid.addEventListener("click", function (e) {
       var card = e.target.closest(".teacher-card");
       if (!card) return;
-      if (!callerAudioUnlocked) {
-        callerAudioUnlocked = true;
-        unlockAudio();
-        try {
-          var warm = new SpeechSynthesisUtterance(" ");
-          warm.volume = 0;
-          speechSynthesis.speak(warm);
-        } catch (e) {}
-      }
+      unlockCallerAudio();
       var name = card.getAttribute("data-name");
       var now = Date.now();
 
@@ -882,6 +1282,105 @@
       awayState[name] = { away: goingAway, at: now };
       renderAwayList();
       publish({ type: "away", teacher: name, away: goingAway, at: now });
+    });
+
+    // ---- live view of the outside tablet's camera, with one-way talk ----
+    var viewOverlay = document.getElementById("view-overlay");
+    var viewVideo = document.getElementById("view-video");
+    var viewStatus = document.getElementById("view-status");
+    var talkBtn = document.getElementById("view-talk");
+    var view = { pc: null, sid: null, mic: null, timer: null, answerTimer: null, connected: false };
+    function viewStop(notify) {
+      if (notify && view.sid) publish({ type: "rtc", kind: "stop", sid: view.sid, at: Date.now() }).catch(function () {});
+      clearTimeout(view.timer);
+      clearTimeout(view.answerTimer);
+      if (view.pc) { try { view.pc.close(); } catch (e) {} }
+      stopStream(view.mic);
+      view = { pc: null, sid: null, mic: null, timer: null, answerTimer: null, connected: false };
+      viewVideo.srcObject = null;
+      viewOverlay.hidden = true;
+      talkBtn.hidden = true;
+      talkBtn.classList.remove("on");
+      talkBtn.textContent = "🎤 말하기 켜기";
+    }
+    async function viewStart() {
+      viewOverlay.hidden = false;
+      if (view.pc) return;
+      viewStatus.textContent = "연결 중…";
+      var sid = newSid();
+      var pc = new RTCPeerConnection(RTC_CONFIG);
+      view.pc = pc;
+      view.sid = sid;
+      pc.addTransceiver("video", { direction: "recvonly" });
+      try {
+        var mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (view.pc !== pc) { stopStream(mic); return; }
+        mic.getAudioTracks().forEach(function (t) { t.enabled = false; pc.addTrack(t, mic); });
+        view.mic = mic;
+        talkBtn.hidden = false;
+      } catch (e) {
+        talkBtn.hidden = true;
+      }
+      pc.ontrack = function (e) {
+        if (e.track.kind !== "video") return;
+        viewVideo.srcObject = e.streams[0] || new MediaStream([e.track]);
+        viewVideo.play().catch(function () {});
+        view.connected = true;
+        viewStatus.textContent = "";
+      };
+      pc.onconnectionstatechange = function () {
+        if (view.pc === pc && pc.connectionState === "failed") viewStatus.textContent = "연결이 끊겼어요. 닫고 다시 시도해 주세요";
+      };
+      try {
+        var offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await waitIceComplete(pc, 3000);
+        if (view.pc !== pc) return;
+        await publish({ type: "rtc", kind: "offer", sid: sid, at: Date.now(), sdp: pc.localDescription.sdp });
+      } catch (e) {
+        viewStatus.textContent = "연결을 시작하지 못했어요";
+        return;
+      }
+      view.answerTimer = setTimeout(function () {
+        if (view.pc === pc && !view.connected) viewStatus.textContent = "밖 태블릿이 응답하지 않아요. 켜져 있는지 확인해 주세요";
+      }, 15000);
+      view.timer = setTimeout(function () { viewStop(true); showToast("2분이 지나 카메라를 껐어요"); }, RTC_MAX_MS);
+    }
+    function handleRtc(p) {
+      if (!view.pc || p.sid !== view.sid) return;
+      if (p.kind === "answer") {
+        if (view.pc.signalingState !== "have-local-offer") return;
+        clearTimeout(view.answerTimer);
+        viewStatus.textContent = "영상 받는 중…";
+        view.pc.setRemoteDescription({ type: "answer", sdp: p.sdp }).catch(function () {
+          viewStatus.textContent = "연결에 실패했어요";
+        });
+      } else if (p.kind === "error") {
+        clearTimeout(view.answerTimer);
+        viewStatus.textContent = p.msg || "연결할 수 없어요";
+      }
+    }
+    document.querySelectorAll(".view-open").forEach(function (b) { b.addEventListener("click", viewStart); });
+    document.getElementById("view-close").addEventListener("click", function () { viewStop(true); });
+    talkBtn.addEventListener("click", function () {
+      if (!view.mic) return;
+      var on = !talkBtn.classList.contains("on");
+      view.mic.getAudioTracks().forEach(function (t) { t.enabled = on; });
+      talkBtn.classList.toggle("on", on);
+      talkBtn.textContent = on ? "🎤 말하는 중 (끄려면 누르세요)" : "🎤 말하기 켜기";
+    });
+
+    var announceBtn = document.getElementById("announce-btn");
+    announceBtn.addEventListener("click", function () {
+      var now = Date.now();
+      announceBtn.disabled = true;
+      setTimeout(function () { announceBtn.disabled = false; }, 8000);
+      showToast("학생 태블릿에 방송했어요 📢");
+      var id = now.toString(36) + Math.random().toString(36).slice(2, 8);
+      publish({ type: "announce", id: id, at: now }).catch(function () {
+        showToast("방송 전송에 실패했어요. 다시 눌러주세요.");
+        announceBtn.disabled = false;
+      });
     });
 
     function renderIdle() {
@@ -978,7 +1477,11 @@
     }
 
     renderIdle();
-    subscribe(function (payload) { applyEvent(payload); renderFromStore(); });
+    subscribe(function (payload) {
+      if (payload && payload.type === "rtc") { handleRtc(payload); return; }
+      applyEvent(payload);
+      renderFromStore();
+    });
   }
 })();
 </script>
